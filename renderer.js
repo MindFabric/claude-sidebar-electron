@@ -563,11 +563,7 @@ async function loadState() {
   // If no non-system collections were loaded, treat as fresh
   if (state.collections.length === 0) return false;
 
-  const aci = Math.min(data.activeCollection || 0, state.collections.length - 1);
-  const ati = Math.min(data.activeTab || 0, state.collections[aci].tabs.length - 1);
-  selectTab(aci, ati);
-  renderCollections();
-
+  // Don't render or select yet - init will insert System first, then render
   return true;
 }
 
@@ -721,30 +717,35 @@ claude.onHotReloadCss(() => {
     // Get app source dir for the System collection
     const appSourceDir = await claude.getAppSourceDir();
 
+    // 1. Load user collections from saved state
     const loaded = await loadState();
     if (!loaded) {
+      // No saved state - create default General collection
+      const gTabId = genTabId();
       state.collections.push({
         name: 'General',
         path: homeDir,
         expanded: true,
-        tabs: [],
+        tabs: [{ id: gTabId, name: 'Session 1', cwd: homeDir }],
       });
-      addSession(0);
+      createTerminalInstance(gTabId, homeDir, false);
     }
 
-    // Always insert System as the first collection
+    // 2. ALWAYS insert System at index 0 - no exceptions
+    const sTabId = genTabId();
     state.collections.unshift({
       name: 'System',
       path: appSourceDir,
       expanded: false,
       isSystem: true,
-      tabs: [],
+      tabs: [{ id: sTabId, name: 'Session 1', cwd: appSourceDir }],
     });
-    // Shift active indices since we inserted at 0
-    if (state.activeCollectionIdx >= 0) state.activeCollectionIdx++;
-    addSession(0);
+    createTerminalInstance(sTabId, appSourceDir, true);
 
+    // 3. Select first user collection (index 1) and render once
+    selectTab(state.collections.length > 1 ? 1 : 0, 0);
     renderCollections();
+    saveState();
   } catch (err) {
     console.error('Init failed:', err);
   }
