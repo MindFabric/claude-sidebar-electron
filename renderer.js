@@ -97,6 +97,11 @@ function createTerminalInstance(tabId, cwd, resume = false) {
 
 // ── Receive data from pty ──
 claude.onTerminalData((id, data) => {
+  // Route to system terminal or user terminals
+  if (id === 'system-claude' && systemTerminal) {
+    systemTerminal.terminal.write(data);
+    return;
+  }
   const inst = terminalInstances.get(id);
   if (inst) inst.terminal.write(data);
 });
@@ -637,6 +642,15 @@ claude.onSaveState(() => saveState());
 
 // ── Resize handler ──
 window.addEventListener('resize', () => {
+  // Resize system terminal if expanded
+  if (systemTerminal && systemTabId) {
+    const systemBar = document.getElementById('system-bar');
+    if (systemBar && !systemBar.classList.contains('collapsed')) {
+      systemTerminal.fitAddon.fit();
+      claude.resizeTerminal(systemTabId, systemTerminal.terminal.cols, systemTerminal.terminal.rows);
+    }
+  }
+
   const tab = getActiveTab();
   if (tab && state.gridCollection === null) {
     const inst = terminalInstances.get(tab.id);
@@ -683,6 +697,77 @@ function escAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+// ── System Terminal ──
+let systemTerminal = null;
+let systemTabId = null;
+
+function initSystemTerminal(appSourceDir) {
+  const container = document.getElementById('system-terminal');
+  const header = document.getElementById('system-header');
+  const systemBar = document.getElementById('system-bar');
+  const resetBtn = document.getElementById('system-reset-btn');
+
+  // Start collapsed
+  systemBar.classList.add('collapsed');
+
+  // Toggle expand/collapse
+  header.addEventListener('click', (e) => {
+    if (e.target === resetBtn) return;
+    systemBar.classList.toggle('collapsed');
+    if (!systemBar.classList.contains('collapsed') && systemTerminal) {
+      requestAnimationFrame(() => {
+        systemTerminal.fitAddon.fit();
+        claude.resizeTerminal(systemTabId, systemTerminal.terminal.cols, systemTerminal.terminal.rows);
+        systemTerminal.terminal.focus();
+      });
+    }
+  });
+
+  // Reset button
+  resetBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (confirm('Reset app UI to defaults? Your plugins will be kept.')) {
+      await claude.resetAppSource();
+      // Reload will happen automatically via file watcher
+    }
+  });
+
+  // Create the system terminal
+  systemTabId = 'system-claude';
+  const term = new Terminal({
+    cursorBlink: true,
+    scrollback: 50000,
+    fontFamily: '"Share Tech Mono", monospace',
+    fontSize: 13,
+    theme: {
+      background: '#0e0e0e',
+      foreground: '#d0d0d0',
+      cursor: '#D97757',
+    },
+  });
+
+  const fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+
+  systemTerminal = { terminal: term, fitAddon };
+
+  term.open(container);
+  term.onData((data) => claude.sendInput(systemTabId, data));
+
+  // Spawn the system Claude pointing at the app source directory
+  claude.createTerminal({ id: systemTabId, cwd: appSourceDir, resume: true });
+
+  requestAnimationFrame(() => fitAddon.fit());
+}
+
+// Handle CSS hot-reload without full page reload
+claude.onHotReloadCss(() => {
+  const link = document.querySelector('link[href="styles.css"]');
+  if (link) {
+    link.href = 'styles.css?' + Date.now();
+  }
+});
+
 // ── Init ──
 (async () => {
   try {
@@ -697,6 +782,10 @@ function escAttr(str) {
     const toggle = isMac ? 'Cmd+Shift+C' : 'Super+C';
     document.getElementById('header-hints').textContent =
       `${toggle} toggle | ${mod}+T new session | ${mod}+P open in path | ${mod}+W close | ${mod}+G grid | Alt+1-9 switch`;
+
+    // Init system terminal
+    const appSourceDir = await claude.getAppSourceDir();
+    initSystemTerminal(appSourceDir);
 
     const loaded = await loadState();
     if (!loaded) {

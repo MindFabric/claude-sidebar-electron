@@ -1,9 +1,10 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('claude', {
-  // Environment - fetched from main process via IPC
+  // Environment
   getHomeDir: () => ipcRenderer.invoke('get-home-dir'),
   getPlatform: () => ipcRenderer.invoke('get-platform'),
+  getAppSourceDir: () => ipcRenderer.invoke('get-app-source-dir'),
 
   // Terminal
   createTerminal: (opts) => ipcRenderer.invoke('terminal-create', opts),
@@ -19,6 +20,10 @@ contextBridge.exposeInMainWorld('claude', {
   saveState: (state) => ipcRenderer.invoke('save-state', state),
   loadState: () => ipcRenderer.invoke('load-state'),
   onSaveState: (callback) => ipcRenderer.on('save-state', callback),
+
+  // Self-modification
+  resetAppSource: () => ipcRenderer.invoke('reset-app-source'),
+  onHotReloadCss: (callback) => ipcRenderer.on('hot-reload-css', callback),
 
   // Dialogs
   pickFolder: () => ipcRenderer.invoke('pick-folder'),

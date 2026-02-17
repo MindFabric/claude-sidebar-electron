@@ -11,12 +11,87 @@ const CLAUDE_CMD = process.env.CLAUDE_SIDEBAR_CMD || 'claude --dangerously-skip-
 const STATE_DIR = path.join(app.getPath('userData'), 'state');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 
+// ── Editable app source ──
+// On first run, copy UI files to a user-writable directory.
+// The app loads from there so the System Claude can edit them live.
+const APP_SOURCE_DIR = path.join(app.getPath('userData'), 'app-source');
+const PLUGINS_DIR = path.join(APP_SOURCE_DIR, 'plugins');
+const EDITABLE_FILES = ['renderer.js', 'styles.css', 'index.html'];
+
+function ensureEditableSource() {
+  fs.mkdirSync(APP_SOURCE_DIR, { recursive: true });
+  fs.mkdirSync(PLUGINS_DIR, { recursive: true });
+
+  // Copy editable files if they don't exist yet (first run or reset)
+  for (const file of EDITABLE_FILES) {
+    const dest = path.join(APP_SOURCE_DIR, file);
+    if (!fs.existsSync(dest)) {
+      const src = path.join(__dirname, file);
+      if (fs.existsSync(src)) {
+        fs.copyFileSync(src, dest);
+      }
+    }
+  }
+
+  // Copy xterm assets if needed
+  const xtermDest = path.join(APP_SOURCE_DIR, 'node_modules', '@xterm');
+  if (!fs.existsSync(xtermDest)) {
+    copyDirSync(path.join(__dirname, 'node_modules', '@xterm'), xtermDest);
+  }
+
+  // Always copy preload.js from bundle (not user-editable for security)
+  fs.copyFileSync(path.join(__dirname, 'preload.js'), path.join(APP_SOURCE_DIR, 'preload.js'));
+
+  // Write a CLAUDE.md to guide the System Claude
+  const claudeMd = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
+  if (!fs.existsSync(claudeMd)) {
+    fs.writeFileSync(claudeMd, `# Claude Sidebar - Editable Source
+
+You are the System Claude for Claude Sidebar. You can modify the app's UI in real time.
+
+## Editable files:
+- **renderer.js** - All client-side logic (collections, tabs, grid, keybindings)
+- **styles.css** - All styling (dark theme, layout, colors)
+- **index.html** - HTML structure
+
+## Plugins:
+- Drop .js or .css files in the \`plugins/\` folder
+- JS plugins are auto-loaded as <script> tags after renderer.js
+- CSS plugins are auto-loaded as <link> tags after styles.css
+
+## Key conventions:
+- Accent color: #D97757 (orange)
+- Background: #1a1a1a
+- Font: Share Tech Mono
+- The \`claude\` object (from preload.js) provides IPC to the main process
+- Do NOT edit preload.js (it's overwritten on reload for security)
+
+## After editing:
+The app will auto-reload when you save changes. State is preserved across reloads.
+`);
+  }
+}
+
+function copyDirSync(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+    if (entry.isDirectory()) {
+      copyDirSync(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
 let mainWindow = null;
-const terminals = new Map(); // id -> { pty, alive }
+const terminals = new Map();
+let fileWatcher = null;
 
 // ── Platform helpers ──
 
-// Convert Windows path to WSL path: C:\Users\foo → /mnt/c/Users/foo
 function winToWslPath(winPath) {
   if (!winPath || !IS_WIN) return winPath;
   const m = winPath.match(/^([A-Za-z]):[/\\](.*)/);
@@ -25,6 +100,8 @@ function winToWslPath(winPath) {
 }
 
 function createWindow() {
+  ensureEditableSource();
+
   mainWindow = new BrowserWindow({
     width: 1920,
     height: 1080,
@@ -32,13 +109,14 @@ function createWindow() {
     backgroundColor: '#1a1a1a',
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(APP_SOURCE_DIR, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
 
-  mainWindow.loadFile('index.html');
+  // Load from editable source directory
+  mainWindow.loadFile(path.join(APP_SOURCE_DIR, 'index.html'));
   mainWindow.maximize();
 
   mainWindow.on('close', (e) => {
@@ -46,9 +124,65 @@ function createWindow() {
     mainWindow.webContents.send('save-state');
     setTimeout(() => {
       destroyAllTerminals();
+      stopFileWatcher();
       mainWindow.destroy();
     }, 300);
   });
+
+  // Watch editable source for changes → hot reload
+  startFileWatcher();
+}
+
+// ── File watcher for hot reload ──
+
+function startFileWatcher() {
+  stopFileWatcher();
+
+  let debounce = null;
+  fileWatcher = fs.watch(APP_SOURCE_DIR, { recursive: false }, (eventType, filename) => {
+    if (!filename) return;
+    // Only reload for editable files and plugins
+    const isEditable = EDITABLE_FILES.includes(filename) || filename.endsWith('.css') || filename.endsWith('.js');
+    if (!isEditable) return;
+
+    // Debounce rapid saves
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        // For CSS-only changes, inject without full reload
+        if (filename === 'styles.css') {
+          mainWindow.webContents.send('hot-reload-css');
+        } else {
+          // Save state, then reload
+          mainWindow.webContents.send('save-state');
+          setTimeout(() => {
+            mainWindow.webContents.reloadIgnoringCache();
+          }, 200);
+        }
+      }
+    }, 500);
+  });
+
+  // Also watch plugins dir
+  if (fs.existsSync(PLUGINS_DIR)) {
+    fs.watch(PLUGINS_DIR, (eventType, filename) => {
+      if (!filename) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('save-state');
+          setTimeout(() => mainWindow.webContents.reloadIgnoringCache(), 200);
+        }
+      }, 500);
+    });
+  }
+}
+
+function stopFileWatcher() {
+  if (fileWatcher) {
+    fileWatcher.close();
+    fileWatcher = null;
+  }
 }
 
 function destroyAllTerminals() {
@@ -60,12 +194,21 @@ function destroyAllTerminals() {
 
 // ── Environment ──
 
-ipcMain.handle('get-home-dir', () => {
-  return os.homedir();
-});
+ipcMain.handle('get-home-dir', () => os.homedir());
+ipcMain.handle('get-platform', () => process.platform);
+ipcMain.handle('get-app-source-dir', () => APP_SOURCE_DIR);
 
-ipcMain.handle('get-platform', () => {
-  return process.platform;
+// ── Reset to defaults ──
+
+ipcMain.handle('reset-app-source', () => {
+  for (const file of EDITABLE_FILES) {
+    const src = path.join(__dirname, file);
+    const dest = path.join(APP_SOURCE_DIR, file);
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+    }
+  }
+  return true;
 });
 
 // ── Terminal management ──
@@ -74,7 +217,6 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
   const home = os.homedir();
   const dir = cwd || home;
 
-  // Strip Claude Code env vars so spawned sessions don't think they're nested
   const cleanEnv = { ...process.env, HOME: home };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
@@ -82,7 +224,6 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
   let ptyProcess;
 
   if (IS_WIN) {
-    // Windows: spawn wsl.exe, run claude inside WSL
     const wslDir = winToWslPath(dir);
     const claudeArg = resume
       ? `cd "${wslDir}" && ${CLAUDE_CMD} --continue; exec bash`
@@ -96,7 +237,6 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
       env: cleanEnv,
     });
   } else {
-    // Linux / macOS: spawn shell directly
     const shell = process.env.SHELL || '/bin/bash';
     const cmd = resume
       ? `cd "${dir}" && ${CLAUDE_CMD} --continue`
@@ -111,14 +251,11 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
     });
   }
 
-  // Track data volume over a rolling window to distinguish working vs idle
-  // Claude working = large bursts of output; Claude idle = tiny TUI refreshes
   let dataBytes = 0;
   let windowStart = Date.now();
 
   ptyProcess.onData((data) => {
     const now = Date.now();
-    // Reset window every 2 seconds
     if (now - windowStart > 2000) {
       dataBytes = 0;
       windowStart = now;
@@ -139,8 +276,6 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
     pty: ptyProcess,
     alive: true,
     isWorking: () => {
-      // If >500 bytes in the current 2s window, Claude is actively working
-      // Idle TUI refreshes are typically <100 bytes
       return dataBytes > 500 && (Date.now() - windowStart) < 3000;
     },
   });
@@ -212,7 +347,6 @@ ipcMain.handle('pick-folder', async () => {
 // ── App lifecycle ──
 
 app.whenReady().then(() => {
-  // Build menu - Mac needs full menu bar, Windows/Linux just needs Edit for clipboard
   const editMenu = {
     label: 'Edit',
     submenu: [
@@ -256,7 +390,6 @@ app.whenReady().then(() => {
 
   createWindow();
 
-  // Global toggle hotkey: Super+C on Linux/Windows, Cmd+Shift+C on Mac
   const toggleKey = IS_MAC ? 'Command+Shift+C' : 'Super+C';
   globalShortcut.register(toggleKey, () => {
     if (mainWindow.isVisible()) {
@@ -269,7 +402,6 @@ app.whenReady().then(() => {
     }
   });
 
-  // Mac: re-create window when dock icon clicked
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
@@ -282,10 +414,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   globalShortcut.unregisterAll();
-  if (!IS_MAC) app.quit(); // Mac apps stay alive in dock
+  if (!IS_MAC) app.quit();
 });
 
 app.on('will-quit', () => {
   destroyAllTerminals();
+  stopFileWatcher();
   globalShortcut.unregisterAll();
 });
