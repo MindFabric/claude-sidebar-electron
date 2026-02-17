@@ -565,7 +565,19 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Alt+1-9
+  // Ctrl/Cmd+1-9: switch tabs within active collection
+  if (ctrl && e.key >= '1' && e.key <= '9') {
+    e.preventDefault();
+    const ci = state.activeCollectionIdx;
+    if (ci >= 0 && state.collections[ci]) {
+      const ti = parseInt(e.key) - 1;
+      if (ti < state.collections[ci].tabs.length) {
+        selectTab(ci, ti);
+      }
+    }
+  }
+
+  // Alt+1-9: switch globally across all collections
   if (e.altKey && e.key >= '1' && e.key <= '9') {
     e.preventDefault();
     const idx = parseInt(e.key) - 1;
