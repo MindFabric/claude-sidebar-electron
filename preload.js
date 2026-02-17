@@ -21,8 +21,14 @@ contextBridge.exposeInMainWorld('claude', {
   loadState: () => ipcRenderer.invoke('load-state'),
   onSaveState: (callback) => ipcRenderer.on('save-state', callback),
 
+  // Soul
+  readSoul: () => ipcRenderer.invoke('read-soul'),
+  writeSoul: (content) => ipcRenderer.invoke('write-soul', content),
+
   // Self-modification
   resetAppSource: () => ipcRenderer.invoke('reset-app-source'),
+  resetSoul: () => ipcRenderer.invoke('reset-soul'),
+  nukeAppSource: () => ipcRenderer.invoke('nuke-app-source'),
   onHotReloadCss: (callback) => ipcRenderer.on('hot-reload-css', callback),
 
   // Dialogs

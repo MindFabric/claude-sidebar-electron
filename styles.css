@@ -435,6 +435,222 @@ body {
   border-color: #444;
 }
 
+/* ── Soul editor ── */
+#soul-editor {
+  position: absolute;
+  inset: 0;
+  background: #141414;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+#soul-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+#soul-editor-title {
+  color: #D97757;
+  font-weight: bold;
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+#soul-editor-btns {
+  display: flex;
+  gap: 6px;
+}
+.soul-btn {
+  color: #999;
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 4px 12px;
+  border: 1px solid #2a2a2a;
+  border-radius: 4px;
+  background: #1a1a1a;
+  cursor: pointer;
+}
+.soul-btn:hover {
+  color: #D97757;
+  border-color: #D97757;
+}
+.soul-btn-close:hover {
+  color: #e74c3c;
+  border-color: #e74c3c;
+}
+#soul-textarea {
+  flex: 1;
+  background: #1a1a1a;
+  color: #d0d0d0;
+  border: none;
+  padding: 16px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+#soul-textarea::selection {
+  background: #D97757;
+  color: #141414;
+}
+
+/* ── Soul button on System header ── */
+.soul-edit-btn {
+  color: #555;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0 2px;
+  min-width: 20px;
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 1px;
+}
+.soul-edit-btn:hover { color: #D97757; }
+
+/* ── Settings button ── */
+#settings-btn {
+  color: #444;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  -webkit-app-region: no-drag;
+}
+#settings-btn:hover { color: #D97757; }
+
+/* ── Settings modal ── */
+#settings-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 20;
+}
+#settings-modal {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  width: 400px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+#settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #2a2a2a;
+  flex-shrink: 0;
+}
+#settings-title {
+  color: #D97757;
+  font-weight: bold;
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+#settings-close-btn {
+  color: #555;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 20px;
+  padding: 0 4px;
+  line-height: 1;
+}
+#settings-close-btn:hover { color: #d0d0d0; }
+#settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+.settings-section {
+  margin-bottom: 16px;
+}
+.settings-section-title {
+  color: #555;
+  font-size: 9px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  margin: 4px 6px 8px;
+}
+.settings-row-btn {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  margin-bottom: 2px;
+  background: #141414;
+  border: 1px solid #222;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+.settings-row-btn:hover {
+  background: #1e1e1e;
+  border-color: #333;
+}
+.settings-row-btn-text {
+  flex: 1;
+  min-width: 0;
+}
+.settings-row-btn .settings-label {
+  color: #d0d0d0;
+  font-size: 12px;
+  display: block;
+  margin-bottom: 2px;
+}
+.settings-row-btn .settings-desc {
+  color: #555;
+  font-size: 10px;
+  display: block;
+}
+.settings-row-arrow {
+  color: #444;
+  font-size: 18px;
+  flex-shrink: 0;
+  margin-left: 8px;
+}
+.settings-row-btn:hover .settings-row-arrow { color: #D97757; }
+.settings-row-btn-nuke {
+  border-color: #e74c3c33;
+}
+.settings-row-btn-nuke .settings-label { color: #e74c3c; }
+.settings-row-btn-nuke:hover {
+  border-color: #e74c3c;
+  background: #1e1414;
+}
+.settings-row-btn-nuke:hover .settings-row-arrow { color: #e74c3c; }
+.settings-about {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-about-name {
+  color: #777;
+  font-size: 12px;
+}
+.settings-about-version {
+  color: #444;
+  font-size: 10px;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar {
   width: 6px;

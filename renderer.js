@@ -116,6 +116,7 @@ function renderCollections() {
         </div>
         <input class="collection-rename" type="text" value="${escAttr(col.name)}">
         <div class="collection-btns">
+          ${col.isSystem ? `<button class="soul-edit-btn" title="Edit Soul">soul</button>` : ''}
           <button class="collection-btn grid-btn" data-ci="${ci}" title="Grid view">${'\u229E'}</button>
           ${col.isSystem ? '' : `<button class="collection-btn-del del-btn" data-ci="${ci}" title="Delete collection">${'\u2715'}</button>`}
           <button class="collection-btn add-btn" data-ci="${ci}" title="New session">+</button>
@@ -231,6 +232,11 @@ function bindCollectionEvents() {
       const ci = parseInt(el.dataset.ci);
       toggleGrid(ci);
     });
+  });
+
+  // Soul edit button
+  document.querySelectorAll('.soul-edit-btn').forEach((el) => {
+    el.addEventListener('click', () => openSoulEditor());
   });
 }
 
@@ -564,7 +570,11 @@ async function loadState() {
   if (state.collections.length === 0) return false;
 
   // Don't render or select yet - init will insert System first, then render
-  return true;
+  // Return saved active indices so init can restore focus
+  return {
+    activeCollection: data.activeCollection || 0,
+    activeTab: data.activeTab || 0,
+  };
 }
 
 // ── Keybindings ──
@@ -689,6 +699,80 @@ function escAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+// ── Soul editor ──
+const soulEditor = document.getElementById('soul-editor');
+const soulTextarea = document.getElementById('soul-textarea');
+
+async function openSoulEditor() {
+  const content = await claude.readSoul();
+  soulTextarea.value = content;
+  soulEditor.classList.remove('hidden');
+  soulTextarea.focus();
+}
+
+function closeSoulEditor() {
+  soulEditor.classList.add('hidden');
+  // Re-focus active terminal
+  const tab = getActiveTab();
+  if (tab) {
+    const inst = terminalInstances.get(tab.id);
+    if (inst) inst.terminal.focus();
+  }
+}
+
+async function saveSoul() {
+  await claude.writeSoul(soulTextarea.value);
+  closeSoulEditor();
+}
+
+document.getElementById('soul-save-btn').addEventListener('click', saveSoul);
+document.getElementById('soul-close-btn').addEventListener('click', closeSoulEditor);
+
+// Ctrl/Cmd+S to save while in soul editor, Escape to close
+soulTextarea.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    saveSoul();
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSoulEditor();
+  }
+});
+
+// ── Settings modal ──
+const settingsOverlay = document.getElementById('settings-overlay');
+
+document.getElementById('settings-btn').addEventListener('click', () => {
+  settingsOverlay.classList.toggle('hidden');
+});
+document.getElementById('settings-close-btn').addEventListener('click', () => {
+  settingsOverlay.classList.add('hidden');
+});
+// Click outside modal to close
+settingsOverlay.addEventListener('click', (e) => {
+  if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
+});
+
+document.getElementById('reset-ui-btn').addEventListener('click', async () => {
+  if (!confirm('Reset UI to factory defaults?\nSoul and plugins are kept.')) return;
+  await claude.resetAppSource();
+  location.reload();
+});
+
+document.getElementById('reset-soul-btn').addEventListener('click', async () => {
+  if (!confirm('Reset soul to default template?\nAll learned preferences will be lost.')) return;
+  await claude.resetSoul();
+  settingsOverlay.classList.add('hidden');
+});
+
+document.getElementById('nuke-btn').addEventListener('click', async () => {
+  if (!confirm('Full factory reset — UI, soul, and plugins all wiped.\nSessions are kept. Continue?')) return;
+  if (!confirm('Last chance. Nuke everything?')) return;
+  await claude.nukeAppSource();
+  location.reload();
+});
+
 // Handle CSS hot-reload without full page reload
 claude.onHotReloadCss(() => {
   const links = document.querySelectorAll('link[rel="stylesheet"]');
@@ -732,6 +816,7 @@ claude.onHotReloadCss(() => {
     }
 
     // 2. ALWAYS insert System at index 0 - no exceptions
+    // Use --continue on reload (loaded = truthy) so System resumes its conversation
     const sTabId = genTabId();
     state.collections.unshift({
       name: 'System',
@@ -740,10 +825,17 @@ claude.onHotReloadCss(() => {
       isSystem: true,
       tabs: [{ id: sTabId, name: 'Session 1', cwd: appSourceDir }],
     });
-    createTerminalInstance(sTabId, appSourceDir, true);
+    createTerminalInstance(sTabId, appSourceDir, !!loaded);
 
-    // 3. Select first user collection (index 1) and render once
-    selectTab(state.collections.length > 1 ? 1 : 0, 0);
+    // 3. Restore saved active tab, or default to first user collection
+    if (loaded) {
+      const aci = Math.min(loaded.activeCollection, state.collections.length - 1);
+      const col = state.collections[aci];
+      const ati = Math.min(loaded.activeTab, (col ? col.tabs.length - 1 : 0));
+      selectTab(aci, Math.max(0, ati));
+    } else {
+      selectTab(state.collections.length > 1 ? 1 : 0, 0);
+    }
     renderCollections();
     saveState();
   } catch (err) {

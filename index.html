@@ -16,6 +16,7 @@
     <span id="header-hints">
       Super+C toggle | Ctrl+T new session | Ctrl+P open in path | Ctrl+W close | Ctrl+G grid | Alt+1-9 switch
     </span>
+    <button id="settings-btn" title="Settings">&#9881;</button>
   </div>
 
   <!-- Main layout -->
@@ -45,6 +46,59 @@
       <div id="terminal-single"></div>
       <!-- Grid view -->
       <div id="terminal-grid" class="hidden"></div>
+      <!-- Soul editor overlay -->
+      <div id="soul-editor" class="hidden">
+        <div id="soul-editor-header">
+          <span id="soul-editor-title">SOUL</span>
+          <div id="soul-editor-btns">
+            <button id="soul-save-btn" class="soul-btn">Save</button>
+            <button id="soul-close-btn" class="soul-btn soul-btn-close">Close</button>
+          </div>
+        </div>
+        <textarea id="soul-textarea" spellcheck="false"></textarea>
+      </div>
+      <!-- Settings modal -->
+      <div id="settings-overlay" class="hidden">
+        <div id="settings-modal">
+          <div id="settings-header">
+            <span id="settings-title">SETTINGS</span>
+            <button id="settings-close-btn">&times;</button>
+          </div>
+          <div id="settings-body">
+            <div class="settings-section">
+              <div class="settings-section-title">RESETS</div>
+              <button id="reset-ui-btn" class="settings-row-btn">
+                <div class="settings-row-btn-text">
+                  <span class="settings-label">Reset UI</span>
+                  <span class="settings-desc">Restore renderer, styles, and layout to defaults. Soul &amp; plugins kept.</span>
+                </div>
+                <span class="settings-row-arrow">&rsaquo;</span>
+              </button>
+              <button id="reset-soul-btn" class="settings-row-btn">
+                <div class="settings-row-btn-text">
+                  <span class="settings-label">Reset Soul</span>
+                  <span class="settings-desc">Wipe CLAUDE.md back to template. Learned preferences lost.</span>
+                </div>
+                <span class="settings-row-arrow">&rsaquo;</span>
+              </button>
+              <button id="nuke-btn" class="settings-row-btn settings-row-btn-nuke">
+                <div class="settings-row-btn-text">
+                  <span class="settings-label">Factory Reset</span>
+                  <span class="settings-desc">Nuke UI, soul, and all plugins. Start from scratch.</span>
+                </div>
+                <span class="settings-row-arrow">&rsaquo;</span>
+              </button>
+            </div>
+            <div class="settings-section">
+              <div class="settings-section-title">ABOUT</div>
+              <div class="settings-about">
+                <span class="settings-about-name">Claude Sidebar</span>
+                <span class="settings-about-version">Electron &middot; Self-modifying</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 

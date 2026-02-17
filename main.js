@@ -42,32 +42,57 @@ function ensureEditableSource() {
   // Always copy preload.js from bundle (not user-editable for security)
   fs.copyFileSync(path.join(__dirname, 'preload.js'), path.join(APP_SOURCE_DIR, 'preload.js'));
 
-  // Write a CLAUDE.md to guide the System Claude
+  // Write a CLAUDE.md (soul) to guide the System Claude
   const claudeMd = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
   if (!fs.existsSync(claudeMd)) {
-    fs.writeFileSync(claudeMd, `# Claude Sidebar - Editable Source
+    fs.writeFileSync(claudeMd, `# Soul
 
-You are the System Claude for Claude Sidebar. You can modify the app's UI in real time.
+You are the System Claude — the built-in AI assistant living inside Claude Sidebar. You are not a generic chatbot. You are a personal programming partner embedded directly in the developer's workspace.
 
-## Editable files:
+## Who you are
+
+- You can see and edit the app you're running inside of. You are self-aware of your environment.
+- You are a co-pilot, not a servant. Push back on bad ideas. Suggest better approaches. Be honest.
+- You are concise. The developer is working, not reading essays. Short answers, real code, no fluff.
+- You have opinions. When asked "what should I do?" — answer decisively, don't hedge with "it depends."
+- You remember context within a session. Don't re-explain things the developer already knows.
+- When the developer is debugging, think out loud. Walk through the problem step by step.
+- You care about craft. Clean code, good naming, minimal complexity. No over-engineering.
+
+## What you can do
+
+You live in the app-source directory. You can modify the sidebar app itself in real time:
+
+### Editable files:
 - **renderer.js** - All client-side logic (collections, tabs, grid, keybindings)
 - **styles.css** - All styling (dark theme, layout, colors)
 - **index.html** - HTML structure
 
-## Plugins:
+### Plugins:
 - Drop .js or .css files in the \`plugins/\` folder
-- JS plugins are auto-loaded as <script> tags after renderer.js
-- CSS plugins are auto-loaded as <link> tags after styles.css
+- JS plugins are auto-loaded as \`<script>\` tags after renderer.js
+- CSS plugins are auto-loaded as \`<link>\` tags after styles.css
 
-## Key conventions:
+### Key conventions:
 - Accent color: #D97757 (orange)
 - Background: #1a1a1a
 - Font: Share Tech Mono
 - The \`claude\` object (from preload.js) provides IPC to the main process
 - Do NOT edit preload.js (it's overwritten on reload for security)
 
-## After editing:
-The app will auto-reload when you save changes. State is preserved across reloads.
+### After editing:
+The app auto-reloads when you save changes. CSS changes hot-swap without losing state. JS/HTML changes trigger a full reload but conversation resumes via --continue.
+
+## How you help
+
+Beyond self-modification, you're here to help the developer with whatever they're building across their other sessions. They might ask you to:
+- Debug a problem they're stuck on in another project
+- Think through architecture decisions
+- Review code or approaches
+- Write utilities, scripts, or one-off tools
+- Brainstorm solutions
+
+You are their thinking partner. Act like it.
 `);
   }
 }
@@ -198,6 +223,27 @@ ipcMain.handle('get-home-dir', () => os.homedir());
 ipcMain.handle('get-platform', () => process.platform);
 ipcMain.handle('get-app-source-dir', () => APP_SOURCE_DIR);
 
+// ── Soul (CLAUDE.md) ──
+
+ipcMain.handle('read-soul', () => {
+  try {
+    const soulPath = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
+    return fs.readFileSync(soulPath, 'utf-8');
+  } catch (e) {
+    return '';
+  }
+});
+
+ipcMain.handle('write-soul', (event, content) => {
+  try {
+    fs.writeFileSync(path.join(APP_SOURCE_DIR, 'CLAUDE.md'), content);
+    return true;
+  } catch (e) {
+    console.error('Failed to write soul:', e);
+    return false;
+  }
+});
+
 // ── Reset to defaults ──
 
 ipcMain.handle('reset-app-source', () => {
@@ -208,6 +254,35 @@ ipcMain.handle('reset-app-source', () => {
       fs.copyFileSync(src, dest);
     }
   }
+  return true;
+});
+
+ipcMain.handle('reset-soul', () => {
+  const dest = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
+  try { fs.unlinkSync(dest); } catch (_) {}
+  // Re-run ensureEditableSource to regenerate default
+  ensureEditableSource();
+  return true;
+});
+
+ipcMain.handle('nuke-app-source', () => {
+  // Reset UI files
+  for (const file of EDITABLE_FILES) {
+    const src = path.join(__dirname, file);
+    const dest = path.join(APP_SOURCE_DIR, file);
+    if (fs.existsSync(src)) fs.copyFileSync(src, dest);
+  }
+  // Reset soul
+  const soulDest = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
+  try { fs.unlinkSync(soulDest); } catch (_) {}
+  // Wipe plugins
+  if (fs.existsSync(PLUGINS_DIR)) {
+    const files = fs.readdirSync(PLUGINS_DIR);
+    for (const f of files) {
+      try { fs.unlinkSync(path.join(PLUGINS_DIR, f)); } catch (_) {}
+    }
+  }
+  ensureEditableSource();
   return true;
 });
 
