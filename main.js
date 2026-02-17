@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu } = require('e
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 const pty = require('node-pty');
 
 const IS_WIN = process.platform === 'win32';
@@ -18,19 +19,44 @@ const APP_SOURCE_DIR = path.join(app.getPath('userData'), 'app-source');
 const PLUGINS_DIR = path.join(APP_SOURCE_DIR, 'plugins');
 const EDITABLE_FILES = ['renderer.js', 'styles.css', 'index.html'];
 
+function hashFiles(dir, files) {
+  const h = crypto.createHash('sha256');
+  for (const file of files) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) h.update(fs.readFileSync(p));
+  }
+  return h.digest('hex');
+}
+
 function ensureEditableSource() {
   fs.mkdirSync(APP_SOURCE_DIR, { recursive: true });
   fs.mkdirSync(PLUGINS_DIR, { recursive: true });
 
-  // Copy editable files if they don't exist yet (first run or reset)
+  // Detect if bundled source has changed (git pull, npm install, etc.)
+  const versionFile = path.join(APP_SOURCE_DIR, '.source-hash');
+  const bundledHash = hashFiles(__dirname, EDITABLE_FILES);
+  let cachedHash = '';
+  try { cachedHash = fs.readFileSync(versionFile, 'utf-8').trim(); } catch (_) {}
+
+  const sourceUpdated = bundledHash !== cachedHash;
+
   for (const file of EDITABLE_FILES) {
+    const src = path.join(__dirname, file);
     const dest = path.join(APP_SOURCE_DIR, file);
+    if (!fs.existsSync(src)) continue;
+
     if (!fs.existsSync(dest)) {
-      const src = path.join(__dirname, file);
-      if (fs.existsSync(src)) {
-        fs.copyFileSync(src, dest);
-      }
+      // First run — just copy
+      fs.copyFileSync(src, dest);
+    } else if (sourceUpdated) {
+      // Source code changed (git pull) — update app-source
+      fs.copyFileSync(src, dest);
     }
+  }
+
+  // Save current hash so we don't re-copy next time
+  if (sourceUpdated) {
+    fs.writeFileSync(versionFile, bundledHash);
   }
 
   // Copy xterm assets if needed
