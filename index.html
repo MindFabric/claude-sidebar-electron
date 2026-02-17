@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Sidebar</title>
+  <link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+  <link rel="stylesheet" href="styles.css">
+  <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <div id="header">
+    <span id="header-title">CLAUDE</span>
+    <span id="header-hints">
+      Super+C toggle | Ctrl+T new session | Ctrl+P open in path | Ctrl+W close | Ctrl+G grid | Alt+1-9 switch
+    </span>
+  </div>
+
+  <!-- Main layout -->
+  <div id="main">
+    <!-- Sidebar -->
+    <div id="sidebar">
+      <div id="sidebar-header">
+        <span class="sidebar-title">WORKSPACE</span>
+      </div>
+
+      <!-- Action buttons -->
+      <div id="sidebar-btn-row">
+        <button id="btn-new-session" class="new-tab-btn">+ Session</button>
+        <button id="btn-new-collection" class="new-tab-btn">+ Collection</button>
+      </div>
+
+      <!-- Collections list -->
+      <div id="collections-list"></div>
+
+      <!-- Voice toggle placeholder (future) -->
+      <div id="mic-box" style="display:none;"></div>
+    </div>
+
+    <!-- Content area -->
+    <div id="content">
+      <!-- Single terminal view -->
+      <div id="terminal-single"></div>
+      <!-- Grid view -->
+      <div id="terminal-grid" class="hidden"></div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
