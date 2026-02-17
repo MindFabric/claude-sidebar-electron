@@ -4,6 +4,7 @@
   "description": "Claude Code Sidebar - Cross-platform workspace manager for Claude Code",
   "main": "main.js",
   "scripts": {
+    "postinstall": "electron-rebuild",
     "start": "electron . --no-sandbox",
     "dev": "electron . --no-sandbox",
     "build": "electron-builder",
@@ -25,6 +26,7 @@
     "node-pty": "^1.0.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
     "electron": "^33.0.0",
     "electron-builder": "^25.1.8"
   },
