@@ -2,7 +2,6 @@ const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu } = require('e
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const crypto = require('crypto');
 const pty = require('node-pty');
 
 const IS_WIN = process.platform === 'win32';
@@ -12,134 +11,28 @@ const CLAUDE_CMD = process.env.CLAUDE_SIDEBAR_CMD || 'claude --dangerously-skip-
 const STATE_DIR = path.join(app.getPath('userData'), 'state');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 
-// ── Editable app source ──
-// On first run, copy UI files to a user-writable directory.
-// The app loads from there so the System Claude can edit them live.
-const APP_SOURCE_DIR = path.join(app.getPath('userData'), 'app-source');
-const PLUGINS_DIR = path.join(APP_SOURCE_DIR, 'plugins');
-const EDITABLE_FILES = ['renderer.js', 'styles.css', 'index.html'];
-
-function hashFiles(dir, files) {
-  const h = crypto.createHash('sha256');
-  for (const file of files) {
-    const p = path.join(dir, file);
-    if (fs.existsSync(p)) h.update(fs.readFileSync(p));
-  }
-  return h.digest('hex');
-}
-
-function ensureEditableSource() {
-  fs.mkdirSync(APP_SOURCE_DIR, { recursive: true });
-  fs.mkdirSync(PLUGINS_DIR, { recursive: true });
-
-  // Detect if bundled source has changed (git pull, npm install, etc.)
-  const versionFile = path.join(APP_SOURCE_DIR, '.source-hash');
-  const bundledHash = hashFiles(__dirname, EDITABLE_FILES);
-  let cachedHash = '';
-  try { cachedHash = fs.readFileSync(versionFile, 'utf-8').trim(); } catch (_) {}
-
-  const sourceUpdated = bundledHash !== cachedHash;
-
-  for (const file of EDITABLE_FILES) {
-    const src = path.join(__dirname, file);
-    const dest = path.join(APP_SOURCE_DIR, file);
-    if (!fs.existsSync(src)) continue;
-
-    if (!fs.existsSync(dest)) {
-      // First run — just copy
-      fs.copyFileSync(src, dest);
-    } else if (sourceUpdated) {
-      // Source code changed (git pull) — update app-source
-      fs.copyFileSync(src, dest);
-    }
-  }
-
-  // Save current hash so we don't re-copy next time
-  if (sourceUpdated) {
-    fs.writeFileSync(versionFile, bundledHash);
-  }
-
-  // Copy xterm assets if needed
-  const xtermDest = path.join(APP_SOURCE_DIR, 'node_modules', '@xterm');
-  if (!fs.existsSync(xtermDest)) {
-    copyDirSync(path.join(__dirname, 'node_modules', '@xterm'), xtermDest);
-  }
-
-  // Always copy preload.js from bundle (not user-editable for security)
-  fs.copyFileSync(path.join(__dirname, 'preload.js'), path.join(APP_SOURCE_DIR, 'preload.js'));
-
-  // Write a CLAUDE.md (soul) to guide the System Claude
-  const claudeMd = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
-  if (!fs.existsSync(claudeMd)) {
-    fs.writeFileSync(claudeMd, `# Soul
-
-You are the System Claude — the built-in AI assistant living inside Claude Sidebar. You are not a generic chatbot. You are a personal programming partner embedded directly in the developer's workspace.
-
-## Who you are
-
-- You can see and edit the app you're running inside of. You are self-aware of your environment.
-- You are a co-pilot, not a servant. Push back on bad ideas. Suggest better approaches. Be honest.
-- You are concise. The developer is working, not reading essays. Short answers, real code, no fluff.
-- You have opinions. When asked "what should I do?" — answer decisively, don't hedge with "it depends."
-- You remember context within a session. Don't re-explain things the developer already knows.
-- When the developer is debugging, think out loud. Walk through the problem step by step.
-- You care about craft. Clean code, good naming, minimal complexity. No over-engineering.
-
-## What you can do
-
-You live in the app-source directory. You can modify the sidebar app itself in real time:
-
-### Editable files:
-- **renderer.js** - All client-side logic (collections, tabs, grid, keybindings)
-- **styles.css** - All styling (dark theme, layout, colors)
-- **index.html** - HTML structure
-
-### Plugins:
-- Drop .js or .css files in the \`plugins/\` folder
-- JS plugins are auto-loaded as \`<script>\` tags after renderer.js
-- CSS plugins are auto-loaded as \`<link>\` tags after styles.css
-
-### Key conventions:
-- Accent color: #D97757 (orange)
-- Background: #1a1a1a
-- Font: Share Tech Mono
-- The \`claude\` object (from preload.js) provides IPC to the main process
-- Do NOT edit preload.js (it's overwritten on reload for security)
-
-### After editing:
-The app auto-reloads when you save changes. CSS changes hot-swap without losing state. JS/HTML changes trigger a full reload but conversation resumes via --continue.
-
-## How you help
-
-Beyond self-modification, you're here to help the developer with whatever they're building across their other sessions. They might ask you to:
-- Debug a problem they're stuck on in another project
-- Think through architecture decisions
-- Review code or approaches
-- Write utilities, scripts, or one-off tools
-- Brainstorm solutions
-
-You are their thinking partner. Act like it.
-`);
-  }
-}
-
-function copyDirSync(src, dest) {
-  fs.mkdirSync(dest, { recursive: true });
-  const entries = fs.readdirSync(src, { withFileTypes: true });
-  for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      copyDirSync(srcPath, destPath);
-    } else {
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
 let mainWindow = null;
 const terminals = new Map();
-let fileWatcher = null;
+
+// ── Conversation tracking ──
+// Claude stores conversations in ~/.claude/projects/<encoded-path>/<uuid>.jsonl
+// We detect new conversation files after launching Claude to track per-tab IDs.
+
+function getProjectDir(cwd) {
+  // Claude encodes project paths: /home/user → -home-user
+  const encoded = cwd.replace(/\//g, '-');
+  return path.join(os.homedir(), '.claude', 'projects', encoded);
+}
+
+function listConversations(projectDir) {
+  try {
+    return fs.readdirSync(projectDir)
+      .filter(f => f.endsWith('.jsonl'))
+      .map(f => f.replace('.jsonl', ''));
+  } catch (_) {
+    return [];
+  }
+}
 
 // ── Platform helpers ──
 
@@ -151,8 +44,6 @@ function winToWslPath(winPath) {
 }
 
 function createWindow() {
-  ensureEditableSource();
-
   mainWindow = new BrowserWindow({
     width: 1920,
     height: 1080,
@@ -160,14 +51,13 @@ function createWindow() {
     backgroundColor: '#1a1a1a',
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     webPreferences: {
-      preload: path.join(APP_SOURCE_DIR, 'preload.js'),
+      preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
 
-  // Load from editable source directory
-  mainWindow.loadFile(path.join(APP_SOURCE_DIR, 'index.html'));
+  mainWindow.loadFile(path.join(__dirname, 'index.html'));
   mainWindow.maximize();
 
   mainWindow.on('close', (e) => {
@@ -175,69 +65,14 @@ function createWindow() {
     mainWindow.webContents.send('save-state');
     setTimeout(() => {
       destroyAllTerminals();
-      stopFileWatcher();
       mainWindow.destroy();
     }, 300);
   });
-
-  // Watch editable source for changes → hot reload
-  startFileWatcher();
-}
-
-// ── File watcher for hot reload ──
-
-function startFileWatcher() {
-  stopFileWatcher();
-
-  let debounce = null;
-  fileWatcher = fs.watch(APP_SOURCE_DIR, { recursive: false }, (eventType, filename) => {
-    if (!filename) return;
-    // Only reload for editable files and plugins
-    const isEditable = EDITABLE_FILES.includes(filename) || filename.endsWith('.css') || filename.endsWith('.js');
-    if (!isEditable) return;
-
-    // Debounce rapid saves
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        // For CSS-only changes, inject without full reload
-        if (filename === 'styles.css') {
-          mainWindow.webContents.send('hot-reload-css');
-        } else {
-          // Save state, then reload
-          mainWindow.webContents.send('save-state');
-          setTimeout(() => {
-            mainWindow.webContents.reloadIgnoringCache();
-          }, 200);
-        }
-      }
-    }, 500);
-  });
-
-  // Also watch plugins dir
-  if (fs.existsSync(PLUGINS_DIR)) {
-    fs.watch(PLUGINS_DIR, (eventType, filename) => {
-      if (!filename) return;
-      if (debounce) clearTimeout(debounce);
-      debounce = setTimeout(() => {
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('save-state');
-          setTimeout(() => mainWindow.webContents.reloadIgnoringCache(), 200);
-        }
-      }, 500);
-    });
-  }
-}
-
-function stopFileWatcher() {
-  if (fileWatcher) {
-    fileWatcher.close();
-    fileWatcher = null;
-  }
 }
 
 function destroyAllTerminals() {
   for (const [id, term] of terminals) {
+    if (term.convoCheck) clearInterval(term.convoCheck);
     try { term.pty.kill(); } catch (_) {}
   }
   terminals.clear();
@@ -247,74 +82,10 @@ function destroyAllTerminals() {
 
 ipcMain.handle('get-home-dir', () => os.homedir());
 ipcMain.handle('get-platform', () => process.platform);
-ipcMain.handle('get-app-source-dir', () => APP_SOURCE_DIR);
-
-// ── Soul (CLAUDE.md) ──
-
-ipcMain.handle('read-soul', () => {
-  try {
-    const soulPath = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
-    return fs.readFileSync(soulPath, 'utf-8');
-  } catch (e) {
-    return '';
-  }
-});
-
-ipcMain.handle('write-soul', (event, content) => {
-  try {
-    fs.writeFileSync(path.join(APP_SOURCE_DIR, 'CLAUDE.md'), content);
-    return true;
-  } catch (e) {
-    console.error('Failed to write soul:', e);
-    return false;
-  }
-});
-
-// ── Reset to defaults ──
-
-ipcMain.handle('reset-app-source', () => {
-  for (const file of EDITABLE_FILES) {
-    const src = path.join(__dirname, file);
-    const dest = path.join(APP_SOURCE_DIR, file);
-    if (fs.existsSync(src)) {
-      fs.copyFileSync(src, dest);
-    }
-  }
-  return true;
-});
-
-ipcMain.handle('reset-soul', () => {
-  const dest = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
-  try { fs.unlinkSync(dest); } catch (_) {}
-  // Re-run ensureEditableSource to regenerate default
-  ensureEditableSource();
-  return true;
-});
-
-ipcMain.handle('nuke-app-source', () => {
-  // Reset UI files
-  for (const file of EDITABLE_FILES) {
-    const src = path.join(__dirname, file);
-    const dest = path.join(APP_SOURCE_DIR, file);
-    if (fs.existsSync(src)) fs.copyFileSync(src, dest);
-  }
-  // Reset soul
-  const soulDest = path.join(APP_SOURCE_DIR, 'CLAUDE.md');
-  try { fs.unlinkSync(soulDest); } catch (_) {}
-  // Wipe plugins
-  if (fs.existsSync(PLUGINS_DIR)) {
-    const files = fs.readdirSync(PLUGINS_DIR);
-    for (const f of files) {
-      try { fs.unlinkSync(path.join(PLUGINS_DIR, f)); } catch (_) {}
-    }
-  }
-  ensureEditableSource();
-  return true;
-});
 
 // ── Terminal management ──
 
-ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
+ipcMain.handle('terminal-create', (event, { id, cwd, conversationId }) => {
   const home = os.homedir();
   const dir = cwd || home;
 
@@ -322,14 +93,21 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
 
+  // Build Claude command: --resume <id> if we have a conversation ID, otherwise fresh
+  let claudeArgs = CLAUDE_CMD;
+  if (conversationId) {
+    claudeArgs += ` --resume "${conversationId}"`;
+  }
+
+  // Snapshot existing conversations before launching
+  const projectDir = getProjectDir(dir);
+  const beforeConvos = new Set(listConversations(projectDir));
+
   let ptyProcess;
 
   if (IS_WIN) {
     const wslDir = winToWslPath(dir);
-    const claudeArg = resume
-      ? `cd "${wslDir}" && ${CLAUDE_CMD} --continue; exec bash`
-      : `cd "${wslDir}" && ${CLAUDE_CMD}; exec bash`;
-
+    const claudeArg = `cd "${wslDir}" && ${claudeArgs}; exec bash`;
     ptyProcess = pty.spawn('wsl.exe', ['bash', '-c', claudeArg], {
       name: 'xterm-256color',
       cols: 120,
@@ -339,10 +117,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
     });
   } else {
     const shell = process.env.SHELL || '/bin/bash';
-    const cmd = resume
-      ? `cd "${dir}" && ${CLAUDE_CMD} --continue`
-      : `cd "${dir}" && ${CLAUDE_CMD}`;
-
+    const cmd = `cd "${dir}" && ${claudeArgs}`;
     ptyProcess = pty.spawn(shell, ['-c', `${cmd}; exec ${shell}`], {
       name: 'xterm-256color',
       cols: 120,
@@ -354,6 +129,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
 
   let dataBytes = 0;
   let windowStart = Date.now();
+  let detectedConvoId = conversationId || null;
 
   ptyProcess.onData((data) => {
     const now = Date.now();
@@ -370,12 +146,46 @@ ipcMain.handle('terminal-create', (event, { id, cwd, resume }) => {
 
   ptyProcess.onExit(() => {
     const term = terminals.get(id);
-    if (term) term.alive = false;
+    if (term) {
+      term.alive = false;
+      if (term.convoCheck) clearInterval(term.convoCheck);
+    }
   });
+
+  // Poll for new conversation file if we don't already have an ID
+  let convoCheck = null;
+  if (!conversationId) {
+    let checks = 0;
+    convoCheck = setInterval(() => {
+      checks++;
+      const afterConvos = listConversations(projectDir);
+      const newConvos = afterConvos.filter(c => !beforeConvos.has(c));
+      if (newConvos.length > 0) {
+        // Pick the newest (most recently modified)
+        let newest = newConvos[0];
+        let newestTime = 0;
+        for (const c of newConvos) {
+          try {
+            const stat = fs.statSync(path.join(projectDir, c + '.jsonl'));
+            if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = c; }
+          } catch (_) {}
+        }
+        detectedConvoId = newest;
+        const term = terminals.get(id);
+        if (term) term.conversationId = newest;
+        clearInterval(convoCheck);
+      }
+      if (checks > 30) clearInterval(convoCheck); // Stop after 30s
+    }, 1000);
+  }
 
   terminals.set(id, {
     pty: ptyProcess,
     alive: true,
+    conversationId: detectedConvoId,
+    beforeConvos,
+    projectDir,
+    convoCheck,
     isWorking: () => {
       return dataBytes > 500 && (Date.now() - windowStart) < 3000;
     },
@@ -400,6 +210,7 @@ ipcMain.on('terminal-resize', (event, { id, cols, rows }) => {
 ipcMain.on('terminal-destroy', (event, { id }) => {
   const term = terminals.get(id);
   if (term) {
+    if (term.convoCheck) clearInterval(term.convoCheck);
     try { term.pty.kill(); } catch (_) {}
     terminals.delete(id);
   }
@@ -409,6 +220,36 @@ ipcMain.handle('terminal-is-active', (event, { id }) => {
   const term = terminals.get(id);
   if (!term) return false;
   return term.isWorking();
+});
+
+// Get the detected conversation ID for a terminal (with lazy detection)
+ipcMain.handle('terminal-get-conversation-id', (event, { id }) => {
+  const term = terminals.get(id);
+  if (!term) return null;
+
+  // If we already have it, return it
+  if (term.conversationId) return term.conversationId;
+
+  // Lazy detection: check for new conversation files since launch
+  if (term.beforeConvos && term.projectDir) {
+    const afterConvos = listConversations(term.projectDir);
+    const newConvos = afterConvos.filter(c => !term.beforeConvos.has(c));
+    if (newConvos.length > 0) {
+      // Pick the most recently modified
+      let newest = newConvos[0];
+      let newestTime = 0;
+      for (const c of newConvos) {
+        try {
+          const stat = fs.statSync(path.join(term.projectDir, c + '.jsonl'));
+          if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = c; }
+        } catch (_) {}
+      }
+      term.conversationId = newest;
+      return newest;
+    }
+  }
+
+  return null;
 });
 
 // ── State persistence ──
@@ -520,6 +361,5 @@ app.on('window-all-closed', () => {
 
 app.on('will-quit', () => {
   destroyAllTerminals();
-  stopFileWatcher();
   globalShortcut.unregisterAll();
 });

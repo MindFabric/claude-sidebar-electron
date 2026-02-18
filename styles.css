@@ -107,51 +107,7 @@ body {
   margin: 0 6px;
 }
 
-/* ── System collection ── */
-.collection-system {
-  margin-bottom: 4px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #2a2a2a;
-}
-.system-header {
-  background: #111 !important;
-  border-left: 2px solid #D97757;
-}
-.system-header:hover {
-  background: #161616 !important;
-}
-.system-header .collection-name {
-  color: #D97757 !important;
-  font-size: 11px !important;
-  letter-spacing: 1px;
-}
-.system-header .collection-path {
-  color: #444 !important;
-  font-size: 8px !important;
-}
-.collection-system .tab-row {
-  background: #0e0e0e;
-  border-left: 1px solid #2a2a2a;
-  margin-left: 8px;
-}
-.collection-system .tab-row:hover {
-  background: #141414;
-}
-.collection-system .tab-row.selected {
-  background: #141414;
-  border-left: 3px solid #D97757;
-}
-.collection-system .row-label {
-  color: #777;
-  font-size: 11px;
-}
-.collection-system .tab-row.selected .row-label {
-  color: #D97757;
-}
-.collection-system .collection-body {
-  border-left: 1px solid #1e1e1e;
-  margin-left: 4px;
-}
+
 .collection-header {
   display: flex;
   align-items: center;
@@ -299,6 +255,43 @@ body {
 .tab-row:hover .row-close { display: flex; }
 .row-close:hover { color: #e74c3c; }
 
+/* ── Tab drag handle ── */
+.row-drag {
+  color: #333;
+  font-size: 10px;
+  cursor: grab;
+  flex-shrink: 0;
+  padding: 0 2px;
+  line-height: 1;
+  letter-spacing: 1px;
+}
+.row-drag:active { cursor: grabbing; }
+.tab-row:hover .row-drag { color: #555; }
+.tab-row.selected .row-drag { color: #D97757; opacity: 0.5; }
+
+/* ── Tab drag state ── */
+.tab-row.dragging {
+  opacity: 0.4;
+}
+.tab-row.drag-over {
+  border-top: 2px solid #D97757;
+  margin-top: -1px;
+}
+
+/* ── Tab rename input ── */
+.row-rename {
+  background: #222;
+  color: #d0d0d0;
+  border: 1px solid #D97757;
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: inherit;
+  font-size: 12px;
+  flex: 1;
+  min-width: 0;
+  display: none;
+}
+
 /* ── Content area ── */
 #content {
   flex: 1;
@@ -434,86 +427,6 @@ body {
   color: #D97757;
   border-color: #444;
 }
-
-/* ── Soul editor ── */
-#soul-editor {
-  position: absolute;
-  inset: 0;
-  background: #141414;
-  display: flex;
-  flex-direction: column;
-  z-index: 10;
-}
-#soul-editor-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-bottom: 1px solid #2a2a2a;
-  flex-shrink: 0;
-}
-#soul-editor-title {
-  color: #D97757;
-  font-weight: bold;
-  font-size: 12px;
-  letter-spacing: 2px;
-}
-#soul-editor-btns {
-  display: flex;
-  gap: 6px;
-}
-.soul-btn {
-  color: #999;
-  font-family: inherit;
-  font-size: 11px;
-  font-weight: bold;
-  padding: 4px 12px;
-  border: 1px solid #2a2a2a;
-  border-radius: 4px;
-  background: #1a1a1a;
-  cursor: pointer;
-}
-.soul-btn:hover {
-  color: #D97757;
-  border-color: #D97757;
-}
-.soul-btn-close:hover {
-  color: #e74c3c;
-  border-color: #e74c3c;
-}
-#soul-textarea {
-  flex: 1;
-  background: #1a1a1a;
-  color: #d0d0d0;
-  border: none;
-  padding: 16px;
-  font-family: 'Share Tech Mono', monospace;
-  font-size: 13px;
-  line-height: 1.6;
-  resize: none;
-  outline: none;
-}
-#soul-textarea::selection {
-  background: #D97757;
-  color: #141414;
-}
-
-/* ── Soul button on System header ── */
-.soul-edit-btn {
-  color: #555;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0 2px;
-  min-width: 20px;
-  min-height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  letter-spacing: 1px;
-}
-.soul-edit-btn:hover { color: #D97757; }
 
 /* ── Settings button ── */
 #settings-btn {

@@ -14,7 +14,6 @@ const state = {
   activeCollectionIdx: -1,
   activeTabIdx: -1,
   gridCollection: null,
-  micDevice: null,
 };
 
 // Terminal instances: tabId -> { terminal, fitAddon, element }
@@ -40,7 +39,7 @@ function getActiveTab() {
 }
 
 // ── Terminal creation ──
-function createTerminalInstance(tabId, cwd, resume = false) {
+function createTerminalInstance(tabId, cwd, conversationId) {
   const term = new Terminal({
     cursorBlink: true,
     scrollback: 50000,
@@ -79,8 +78,8 @@ function createTerminalInstance(tabId, cwd, resume = false) {
 
   terminalInstances.set(tabId, { terminal: term, fitAddon, element: el });
 
-  // Spawn backend pty
-  claude.createTerminal({ id: tabId, cwd, resume });
+  // Spawn backend pty — pass conversationId for --resume if available
+  claude.createTerminal({ id: tabId, cwd, conversationId: conversationId || null });
 
   // Pipe input to pty
   term.onData((data) => claude.sendInput(tabId, data));
@@ -95,6 +94,17 @@ function createTerminalInstance(tabId, cwd, resume = false) {
   return { terminal: term, fitAddon, element: el };
 }
 
+// ── Terminal cleanup ──
+function destroyTerminalInstance(tabId) {
+  claude.destroyTerminal(tabId);
+  const inst = terminalInstances.get(tabId);
+  if (inst) {
+    if (inst.element.parentNode) inst.element.parentNode.removeChild(inst.element);
+    try { inst.terminal.dispose(); } catch (_) {}
+    terminalInstances.delete(tabId);
+  }
+}
+
 // ── Receive data from pty ──
 claude.onTerminalData((id, data) => {
   const inst = terminalInstances.get(id);
@@ -106,9 +116,9 @@ function renderCollections() {
   collectionsList.innerHTML = '';
   state.collections.forEach((col, ci) => {
     const colEl = document.createElement('div');
-    colEl.className = `collection${col.isSystem ? ' collection-system' : ''}`;
+    colEl.className = 'collection';
     colEl.innerHTML = `
-      <div class="collection-header${col.isSystem ? ' system-header' : ''}" data-ci="${ci}">
+      <div class="collection-header" data-ci="${ci}">
         <span class="collection-arrow">${col.expanded ? '\u25BC' : '\u25B6'}</span>
         <div class="collection-info">
           <span class="collection-name">${escHtml(col.name)}</span>
@@ -116,18 +126,19 @@ function renderCollections() {
         </div>
         <input class="collection-rename" type="text" value="${escAttr(col.name)}">
         <div class="collection-btns">
-          ${col.isSystem ? `<button class="soul-edit-btn" title="Edit Soul">soul</button>` : ''}
           <button class="collection-btn grid-btn" data-ci="${ci}" title="Grid view">${'\u229E'}</button>
-          ${col.isSystem ? '' : `<button class="collection-btn-del del-btn" data-ci="${ci}" title="Delete collection">${'\u2715'}</button>`}
+          <button class="collection-btn-del del-btn" data-ci="${ci}" title="Delete collection">${'\u2715'}</button>
           <button class="collection-btn add-btn" data-ci="${ci}" title="New session">+</button>
         </div>
       </div>
       <div class="collection-body ${col.expanded ? '' : 'collapsed'}" data-ci="${ci}">
         ${col.tabs.map((tab, ti) => `
           <div class="tab-row ${ci === state.activeCollectionIdx && ti === state.activeTabIdx ? 'selected' : ''}"
-               data-ci="${ci}" data-ti="${ti}">
+               data-ci="${ci}" data-ti="${ti}" draggable="true">
+            <span class="row-drag" title="Drag to reorder">${'\u2847'}</span>
             <span class="row-dot" data-tabid="${tab.id}">${'\u2022'}</span>
             <span class="row-label">${escHtml(tab.name)}</span>
+            <input class="row-rename" type="text" value="${escAttr(tab.name)}">
             <button class="row-close" data-ci="${ci}" data-ti="${ti}">${'\u2715'}</button>
           </div>
         `).join('')}
@@ -166,7 +177,6 @@ function bindCollectionEvents() {
       if (e.target.closest('.collection-btns')) return;
       if (clickTimer) { clearTimeout(clickTimer); clickTimer = null; }
       const ci = parseInt(el.dataset.ci);
-      const nameEl = el.querySelector('.collection-name');
       const infoEl = el.querySelector('.collection-info');
       const input = el.querySelector('.collection-rename');
       infoEl.style.display = 'none';
@@ -191,13 +201,103 @@ function bindCollectionEvents() {
     });
   });
 
-  // Tab row click
+  // Tab row click + double-click rename
   document.querySelectorAll('.tab-row').forEach((el) => {
+    let tabClickTimer = null;
+
     el.addEventListener('click', (e) => {
       if (e.target.classList.contains('row-close')) return;
+      if (e.target.classList.contains('row-rename')) return;
+      if (e.target.classList.contains('row-drag')) return;
+      if (tabClickTimer) { clearTimeout(tabClickTimer); tabClickTimer = null; return; }
+      tabClickTimer = setTimeout(() => {
+        tabClickTimer = null;
+        const ci = parseInt(el.dataset.ci);
+        const ti = parseInt(el.dataset.ti);
+        selectTab(ci, ti);
+      }, 250);
+    });
+
+    el.addEventListener('dblclick', (e) => {
+      if (e.target.classList.contains('row-close')) return;
+      if (e.target.classList.contains('row-drag')) return;
+      if (tabClickTimer) { clearTimeout(tabClickTimer); tabClickTimer = null; }
       const ci = parseInt(el.dataset.ci);
       const ti = parseInt(el.dataset.ti);
-      selectTab(ci, ti);
+      const label = el.querySelector('.row-label');
+      const input = el.querySelector('.row-rename');
+      label.style.display = 'none';
+      input.style.display = 'block';
+      input.value = state.collections[ci].tabs[ti].name;
+      input.focus();
+      input.select();
+
+      const finish = () => {
+        const val = input.value.trim();
+        if (val) state.collections[ci].tabs[ti].name = val;
+        label.style.display = '';
+        input.style.display = 'none';
+        renderCollections();
+        saveState();
+      };
+      input.onkeydown = (ev) => {
+        if (ev.key === 'Enter') { ev.preventDefault(); finish(); }
+        if (ev.key === 'Escape') { label.style.display = ''; input.style.display = 'none'; }
+      };
+      input.onblur = finish;
+    });
+
+    // Drag and drop reordering
+    el.addEventListener('dragstart', (e) => {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', `${el.dataset.ci}:${el.dataset.ti}`);
+      el.classList.add('dragging');
+    });
+
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      document.querySelectorAll('.tab-row.drag-over').forEach(r => r.classList.remove('drag-over'));
+    });
+
+    el.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      el.classList.add('drag-over');
+    });
+
+    el.addEventListener('dragleave', () => {
+      el.classList.remove('drag-over');
+    });
+
+    el.addEventListener('drop', (e) => {
+      e.preventDefault();
+      el.classList.remove('drag-over');
+      const [srcCi, srcTi] = e.dataTransfer.getData('text/plain').split(':').map(Number);
+      const dstCi = parseInt(el.dataset.ci);
+      const dstTi = parseInt(el.dataset.ti);
+
+      // Only reorder within same collection
+      if (srcCi !== dstCi) return;
+      if (srcTi === dstTi) return;
+
+      const col = state.collections[srcCi];
+      const [moved] = col.tabs.splice(srcTi, 1);
+      const insertAt = srcTi < dstTi ? dstTi : dstTi;
+      col.tabs.splice(insertAt, 0, moved);
+
+      // Update active tab index if needed
+      if (state.activeCollectionIdx === srcCi) {
+        if (state.activeTabIdx === srcTi) {
+          state.activeTabIdx = insertAt;
+        } else if (srcTi < state.activeTabIdx && insertAt >= state.activeTabIdx) {
+          state.activeTabIdx--;
+        } else if (srcTi > state.activeTabIdx && insertAt <= state.activeTabIdx) {
+          state.activeTabIdx++;
+        }
+      }
+
+      renderCollections();
+      saveState();
     });
   });
 
@@ -233,16 +333,10 @@ function bindCollectionEvents() {
       toggleGrid(ci);
     });
   });
-
-  // Soul edit button
-  document.querySelectorAll('.soul-edit-btn').forEach((el) => {
-    el.addEventListener('click', () => openSoulEditor());
-  });
 }
 
 // ── Tab selection ──
 function selectTab(ci, ti) {
-  // Exit grid if selecting from different collection
   if (state.gridCollection !== null && state.gridCollection !== ci) {
     exitGridMode();
   }
@@ -253,25 +347,28 @@ function selectTab(ci, ti) {
   const tab = state.collections[ci].tabs[ti];
   if (!tab) return;
 
-  // Update sidebar selection
   document.querySelectorAll('.tab-row').forEach((el) => el.classList.remove('selected'));
   const row = document.querySelector(`.tab-row[data-ci="${ci}"][data-ti="${ti}"]`);
   if (row) row.classList.add('selected');
 
-  // Show terminal and focus it
   if (state.gridCollection === null) {
     showSingleTerminal(tab.id);
   } else {
-    // Grid mode: highlight selected cell and focus its terminal
     highlightGridCell(tab.id);
   }
 }
 
 function showSingleTerminal(tabId) {
-  terminalSingle.innerHTML = '';
+  // Hide all terminals instead of removing them (preserves scroll position)
+  for (const child of terminalSingle.children) {
+    child.style.display = 'none';
+  }
   const inst = terminalInstances.get(tabId);
   if (inst) {
-    terminalSingle.appendChild(inst.element);
+    if (!inst.element.parentNode || inst.element.parentNode !== terminalSingle) {
+      terminalSingle.appendChild(inst.element);
+    }
+    inst.element.style.display = '';
     requestAnimationFrame(() => {
       inst.fitAddon.fit();
       claude.resizeTerminal(tabId, inst.terminal.cols, inst.terminal.rows);
@@ -281,12 +378,9 @@ function showSingleTerminal(tabId) {
 }
 
 function highlightGridCell(tabId) {
-  // Remove highlight from all grid cells
   document.querySelectorAll('.grid-cell').forEach((cell) => {
     cell.classList.remove('grid-cell-active');
   });
-
-  // Find and highlight the cell containing this terminal, then focus it
   const inst = terminalInstances.get(tabId);
   if (inst && inst.element) {
     const cell = inst.element.closest('.grid-cell');
@@ -308,11 +402,9 @@ function addSession(ci, cwd = null) {
   const name = `Session ${col.tabs.length + 1}`;
 
   col.tabs.push({ id: tabId, name, cwd: dir });
-  createTerminalInstance(tabId, dir, false);
+  createTerminalInstance(tabId, dir, null);
 
-  // Expand if collapsed
   col.expanded = true;
-
   selectTab(ci, col.tabs.length - 1);
   renderCollections();
 
@@ -331,23 +423,15 @@ function closeSession(ci, ti) {
   const wasGridded = state.gridCollection === ci;
   if (wasGridded) exitGridMode();
 
-  // Destroy terminal
-  claude.destroyTerminal(tab.id);
-  const inst = terminalInstances.get(tab.id);
-  if (inst) {
-    inst.terminal.dispose();
-    terminalInstances.delete(tab.id);
-  }
+  destroyTerminalInstance(tab.id);
 
   col.tabs.splice(ti, 1);
 
-  // Re-select if needed
   if (ci === state.activeCollectionIdx) {
     if (col.tabs.length > 0) {
       const newTi = Math.min(ti, col.tabs.length - 1);
       selectTab(ci, newTi);
     } else {
-      // Find any tab in any collection
       for (let i = 0; i < state.collections.length; i++) {
         if (state.collections[i].tabs.length > 0) {
           selectTab(i, 0);
@@ -381,11 +465,10 @@ async function addCollection(askPath = false) {
   state.collections.push(col);
   const ci = state.collections.length - 1;
 
-  // Auto-create first session
   if (askPath) {
     const tabId = genTabId();
     col.tabs.push({ id: tabId, name: 'Session 1', cwd: folderPath });
-    createTerminalInstance(tabId, folderPath, false);
+    createTerminalInstance(tabId, folderPath, null);
     selectTab(ci, 0);
   }
 
@@ -395,27 +478,21 @@ async function addCollection(askPath = false) {
 
 function deleteCollection(ci) {
   if (state.collections.length <= 1) return;
-  if (state.collections[ci] && state.collections[ci].isSystem) return; // Can't delete System
 
   if (state.gridCollection === ci) exitGridMode();
 
   const col = state.collections[ci];
 
-  // Destroy all terminals
   col.tabs.forEach((tab) => {
-    claude.destroyTerminal(tab.id);
-    const inst = terminalInstances.get(tab.id);
-    if (inst) { inst.terminal.dispose(); terminalInstances.delete(tab.id); }
+    destroyTerminalInstance(tab.id);
   });
 
   state.collections.splice(ci, 1);
 
-  // Fix active indices
   if (state.activeCollectionIdx >= state.collections.length) {
     state.activeCollectionIdx = state.collections.length - 1;
   }
   if (state.activeCollectionIdx === ci || state.activeCollectionIdx < 0) {
-    // Find first collection with tabs
     for (let i = 0; i < state.collections.length; i++) {
       if (state.collections[i].tabs.length > 0) {
         selectTab(i, 0);
@@ -424,7 +501,6 @@ function deleteCollection(ci) {
     }
   }
 
-  // Fix grid reference
   if (state.gridCollection !== null) {
     if (state.gridCollection === ci) state.gridCollection = null;
     else if (state.gridCollection > ci) state.gridCollection--;
@@ -450,12 +526,10 @@ function enterGridMode(ci) {
   if (!col || !col.tabs.length) return;
 
   state.gridCollection = ci;
-
   terminalSingle.classList.add('hidden');
   terminalGrid.classList.remove('hidden');
   terminalGrid.innerHTML = '';
 
-  // Dynamic column count based on session count
   const count = col.tabs.length;
   const cols = count <= 2 ? count : count <= 4 ? 2 : 3;
   terminalGrid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
@@ -478,7 +552,6 @@ function enterGridMode(ci) {
     });
     header.appendChild(closeBtn);
 
-    // Click cell header to select and focus this terminal
     header.addEventListener('click', (e) => {
       if (e.target === closeBtn) return;
       selectTab(ci, ti);
@@ -488,6 +561,9 @@ function enterGridMode(ci) {
 
     const inst = terminalInstances.get(tab.id);
     if (inst) {
+      // Detach from previous parent (terminalSingle) before moving to grid cell
+      if (inst.element.parentNode) inst.element.parentNode.removeChild(inst.element);
+      inst.element.style.display = '';
       cell.appendChild(inst.element);
       requestAnimationFrame(() => {
         inst.fitAddon.fit();
@@ -502,13 +578,19 @@ function enterGridMode(ci) {
 function exitGridMode() {
   if (state.gridCollection === null) return;
 
-  // Move terminal elements back (they'll be re-attached on selectTab)
+  // Detach all terminal elements from grid cells BEFORE clearing grid
+  // so they aren't orphaned when grid-cell divs are destroyed
+  for (const [, inst] of terminalInstances) {
+    if (inst.element.parentNode && inst.element.closest('#terminal-grid')) {
+      inst.element.parentNode.removeChild(inst.element);
+    }
+  }
+
   state.gridCollection = null;
   terminalGrid.classList.add('hidden');
   terminalGrid.innerHTML = '';
   terminalSingle.classList.remove('hidden');
 
-  // Re-show active tab
   const tab = getActiveTab();
   if (tab) showSingleTerminal(tab.id);
 
@@ -516,18 +598,30 @@ function exitGridMode() {
 }
 
 // ── State persistence ──
+// Before saving, fetch conversation IDs from main process for each tab
 async function saveState() {
+  // Update conversation IDs from main process (parallel for speed)
+  const allTabs = state.collections.flatMap(col => col.tabs);
+  const convoResults = await Promise.all(
+    allTabs.map(tab => claude.getConversationId(tab.id).catch(() => null))
+  );
+  allTabs.forEach((tab, i) => {
+    if (convoResults[i]) tab.conversationId = convoResults[i];
+  });
+
   const data = {
     collections: state.collections.map((col) => ({
       name: col.name,
       path: col.path,
       expanded: col.expanded,
-      isSystem: col.isSystem || false,
-      tabs: col.tabs.map((t) => ({ name: t.name, cwd: t.cwd })),
+      tabs: col.tabs.map((t) => ({
+        name: t.name,
+        cwd: t.cwd,
+        conversationId: t.conversationId || null,
+      })),
     })),
     activeCollection: state.activeCollectionIdx,
     activeTab: state.activeTabIdx,
-    micDevice: state.micDevice,
   };
   await claude.saveState(data);
 }
@@ -538,15 +632,13 @@ async function loadState() {
 
   for (let ci = 0; ci < data.collections.length; ci++) {
     const colData = data.collections[ci];
-    // Skip System collections from saved state - we always recreate it fresh
-    // Also skip any collection named "System" from old state without the flag
+    // Skip any leftover System collections from old state
     if (colData.isSystem || colData.name === 'System') continue;
 
     const col = {
       name: colData.name || `Collection ${ci + 1}`,
       path: colData.path || homeDir || '/',
       expanded: colData.expanded !== false,
-      isSystem: false,
       tabs: [],
     };
 
@@ -557,20 +649,21 @@ async function loadState() {
     for (const tabData of tabs) {
       const tabId = genTabId();
       const cwd = tabData.cwd || col.path;
-      col.tabs.push({ id: tabId, name: tabData.name || 'Session', cwd });
-      createTerminalInstance(tabId, cwd, true);
+      col.tabs.push({
+        id: tabId,
+        name: tabData.name || 'Session',
+        cwd,
+        conversationId: tabData.conversationId || null,
+      });
+      // Resume specific conversation if we have its ID, otherwise start fresh
+      createTerminalInstance(tabId, cwd, tabData.conversationId || null);
     }
 
     state.collections.push(col);
   }
 
-  state.micDevice = data.micDevice || null;
-
-  // If no non-system collections were loaded, treat as fresh
   if (state.collections.length === 0) return false;
 
-  // Don't render or select yet - init will insert System first, then render
-  // Return saved active indices so init can restore focus
   return {
     activeCollection: data.activeCollection || 0,
     activeTab: data.activeTab || 0,
@@ -632,19 +725,19 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// ── Activity polling (dots + per-terminal border) ──
+// ── Activity polling ──
 setInterval(async () => {
-  for (const [tabId, inst] of terminalInstances) {
-    const active = await claude.isTerminalActive(tabId);
-
-    // Sidebar dot
+  const tabIds = [...terminalInstances.keys()];
+  const results = await Promise.all(
+    tabIds.map(id => claude.isTerminalActive(id).catch(() => false))
+  );
+  tabIds.forEach((tabId, i) => {
     const dot = document.querySelector(`.row-dot[data-tabid="${tabId}"]`);
     if (dot) {
-      if (active) dot.classList.add('active');
+      if (results[i]) dot.classList.add('active');
       else dot.classList.remove('active');
     }
-
-  }
+  });
 }, 1500);
 
 // ── Auto-save ──
@@ -677,67 +770,12 @@ window.addEventListener('resize', () => {
 
 // ── Button events ──
 document.getElementById('btn-new-session').addEventListener('click', () => {
-  console.log('+ Session clicked, activeIdx:', state.activeCollectionIdx, 'collections:', state.collections.length);
   const ci = state.activeCollectionIdx >= 0 ? state.activeCollectionIdx : 0;
-  if (state.collections[ci]) {
-    addSession(ci);
-  } else {
-    console.error('No collection at index', ci);
-  }
+  if (state.collections[ci]) addSession(ci);
 });
 
 document.getElementById('btn-new-collection').addEventListener('click', () => {
-  console.log('+ Collection clicked');
   addCollection(true).catch(err => console.error('addCollection failed:', err));
-});
-
-// ── Utility ──
-function escHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-function escAttr(str) {
-  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-}
-
-// ── Soul editor ──
-const soulEditor = document.getElementById('soul-editor');
-const soulTextarea = document.getElementById('soul-textarea');
-
-async function openSoulEditor() {
-  const content = await claude.readSoul();
-  soulTextarea.value = content;
-  soulEditor.classList.remove('hidden');
-  soulTextarea.focus();
-}
-
-function closeSoulEditor() {
-  soulEditor.classList.add('hidden');
-  // Re-focus active terminal
-  const tab = getActiveTab();
-  if (tab) {
-    const inst = terminalInstances.get(tab.id);
-    if (inst) inst.terminal.focus();
-  }
-}
-
-async function saveSoul() {
-  await claude.writeSoul(soulTextarea.value);
-  closeSoulEditor();
-}
-
-document.getElementById('soul-save-btn').addEventListener('click', saveSoul);
-document.getElementById('soul-close-btn').addEventListener('click', closeSoulEditor);
-
-// Ctrl/Cmd+S to save while in soul editor, Escape to close
-soulTextarea.addEventListener('keydown', (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
-    e.preventDefault();
-    saveSoul();
-  }
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    closeSoulEditor();
-  }
 });
 
 // ── Settings modal ──
@@ -749,62 +787,40 @@ document.getElementById('settings-btn').addEventListener('click', () => {
 document.getElementById('settings-close-btn').addEventListener('click', () => {
   settingsOverlay.classList.add('hidden');
 });
-// Click outside modal to close
 settingsOverlay.addEventListener('click', (e) => {
   if (e.target === settingsOverlay) settingsOverlay.classList.add('hidden');
 });
 
-document.getElementById('reset-ui-btn').addEventListener('click', async () => {
-  if (!confirm('Reset UI to factory defaults?\nSoul and plugins are kept.')) return;
-  await claude.resetAppSource();
-  location.reload();
-});
-
-document.getElementById('reset-soul-btn').addEventListener('click', async () => {
-  if (!confirm('Reset soul to default template?\nAll learned preferences will be lost.')) return;
-  await claude.resetSoul();
-  settingsOverlay.classList.add('hidden');
-});
-
 document.getElementById('nuke-btn').addEventListener('click', async () => {
-  if (!confirm('Full factory reset — UI, soul, and plugins all wiped.\nSessions are kept. Continue?')) return;
-  if (!confirm('Last chance. Nuke everything?')) return;
-  await claude.nukeAppSource();
+  if (!confirm('Factory reset — clear all saved state and start fresh?')) return;
+  if (!confirm('Last chance. Reset everything?')) return;
+  await claude.saveState(null);
   location.reload();
 });
 
-// Handle CSS hot-reload without full page reload
-claude.onHotReloadCss(() => {
-  const links = document.querySelectorAll('link[rel="stylesheet"]');
-  links.forEach((link) => {
-    if (link.href.includes('styles.css')) {
-      link.href = 'styles.css?' + Date.now();
-    }
-  });
-});
+// ── Utility ──
+function escHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+function escAttr(str) {
+  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
 
 // ── Init ──
 (async () => {
   try {
-    // Resolve home directory and platform from main process
     homeDir = await claude.getHomeDir() || '/';
     const platform = await claude.getPlatform();
     const isMac = platform === 'darwin';
     document.body.classList.add(`platform-${platform}`);
 
-    // Set platform-appropriate keyboard hints
     const mod = isMac ? 'Cmd' : 'Ctrl';
     const toggle = isMac ? 'Cmd+Shift+C' : 'Super+C';
     document.getElementById('header-hints').textContent =
       `${toggle} toggle | ${mod}+T new session | ${mod}+P open in path | ${mod}+W close | ${mod}+G grid | Alt+1-9 switch`;
 
-    // Get app source dir for the System collection
-    const appSourceDir = await claude.getAppSourceDir();
-
-    // 1. Load user collections from saved state
     const loaded = await loadState();
     if (!loaded) {
-      // No saved state - create default General collection
       const gTabId = genTabId();
       state.collections.push({
         name: 'General',
@@ -812,29 +828,16 @@ claude.onHotReloadCss(() => {
         expanded: true,
         tabs: [{ id: gTabId, name: 'Session 1', cwd: homeDir }],
       });
-      createTerminalInstance(gTabId, homeDir, false);
+      createTerminalInstance(gTabId, homeDir, null);
     }
 
-    // 2. ALWAYS insert System at index 0 - no exceptions
-    // Use --continue on reload (loaded = truthy) so System resumes its conversation
-    const sTabId = genTabId();
-    state.collections.unshift({
-      name: 'System',
-      path: appSourceDir,
-      expanded: false,
-      isSystem: true,
-      tabs: [{ id: sTabId, name: 'Session 1', cwd: appSourceDir }],
-    });
-    createTerminalInstance(sTabId, appSourceDir, !!loaded);
-
-    // 3. Restore saved active tab, or default to first user collection
     if (loaded) {
       const aci = Math.min(loaded.activeCollection, state.collections.length - 1);
       const col = state.collections[aci];
       const ati = Math.min(loaded.activeTab, (col ? col.tabs.length - 1 : 0));
-      selectTab(aci, Math.max(0, ati));
+      selectTab(Math.max(0, aci), Math.max(0, ati));
     } else {
-      selectTab(state.collections.length > 1 ? 1 : 0, 0);
+      selectTab(0, 0);
     }
     renderCollections();
     saveState();
