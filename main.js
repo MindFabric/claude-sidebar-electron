@@ -111,7 +111,7 @@ async function autoNameSession(id) {
 
 // ── Terminal management ──
 
-ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name }) => {
+ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, collectionName }) => {
   const home = os.homedir();
   const dir = cwd || home;
 
@@ -166,7 +166,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name }) => 
     dataBytes += data.length;
 
     // Feed journal with terminal output
-    journal.feed(id, name || id, data);
+    journal.feed(id, name || id, collectionName || path.basename(dir), data);
 
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('terminal-data', { id, data });

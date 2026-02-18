@@ -39,7 +39,7 @@ function getActiveTab() {
 }
 
 // ── Terminal creation ──
-function createTerminalInstance(tabId, cwd, conversationId, name) {
+function createTerminalInstance(tabId, cwd, conversationId, name, collectionName) {
   const term = new Terminal({
     cursorBlink: true,
     scrollback: 50000,
@@ -79,7 +79,7 @@ function createTerminalInstance(tabId, cwd, conversationId, name) {
   terminalInstances.set(tabId, { terminal: term, fitAddon, element: el });
 
   // Spawn backend pty — pass conversationId for --resume if available
-  claude.createTerminal({ id: tabId, cwd, conversationId: conversationId || null, name: name || tabId });
+  claude.createTerminal({ id: tabId, cwd, conversationId: conversationId || null, name: name || tabId, collectionName: collectionName || '' });
 
   // Pipe input to pty
   term.onData((data) => claude.sendInput(tabId, data));
@@ -418,7 +418,7 @@ function addSession(ci, cwd = null) {
   const name = `Session ${col.tabs.length + 1}`;
 
   col.tabs.push({ id: tabId, name, cwd: dir });
-  createTerminalInstance(tabId, dir, null, name);
+  createTerminalInstance(tabId, dir, null, name, col.name);
 
   col.expanded = true;
   selectTab(ci, col.tabs.length - 1);
@@ -484,7 +484,7 @@ async function addCollection(askPath = false) {
   if (askPath) {
     const tabId = genTabId();
     col.tabs.push({ id: tabId, name: 'Session 1', cwd: folderPath });
-    createTerminalInstance(tabId, folderPath, null, 'Session 1');
+    createTerminalInstance(tabId, folderPath, null, 'Session 1', col.name);
     selectTab(ci, 0);
   }
 
@@ -672,7 +672,7 @@ async function loadState() {
         conversationId: tabData.conversationId || null,
       });
       // Resume specific conversation if we have its ID, otherwise start fresh
-      createTerminalInstance(tabId, cwd, tabData.conversationId || null, tabData.name || 'Session');
+      createTerminalInstance(tabId, cwd, tabData.conversationId || null, tabData.name || 'Session', col.name);
     }
 
     state.collections.push(col);
@@ -1051,7 +1051,7 @@ function escAttr(str) {
         expanded: true,
         tabs: [{ id: gTabId, name: 'Session 1', cwd: homeDir }],
       });
-      createTerminalInstance(gTabId, homeDir, null, 'Session 1');
+      createTerminalInstance(gTabId, homeDir, null, 'Session 1', 'General');
     }
 
     if (loaded) {

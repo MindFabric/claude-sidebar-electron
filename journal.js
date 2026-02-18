@@ -7,7 +7,7 @@ const JOURNAL_DIR = path.join(os.homedir(), 'Documents', 'journal');
 const BUFFER_MAX_LINES = 400;
 const SUMMARIZE_INTERVAL = 5 * 60 * 1000; // 5 minutes
 
-// Per-terminal ring buffers: id -> { name, lines[] }
+// Per-terminal ring buffers: id -> { name, collection, lines[] }
 const buffers = new Map();
 
 // Strip ANSI escape codes and control chars from terminal output
@@ -20,9 +20,9 @@ function stripAnsi(str) {
     .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, '');
 }
 
-function feed(terminalId, terminalName, data) {
+function feed(terminalId, terminalName, collectionName, data) {
   if (!buffers.has(terminalId)) {
-    buffers.set(terminalId, { name: terminalName, lines: [] });
+    buffers.set(terminalId, { name: terminalName, collection: collectionName || 'unknown', lines: [] });
   }
   const buf = buffers.get(terminalId);
   const clean = stripAnsi(data);
@@ -56,7 +56,8 @@ function hasContent() {
 }
 
 function collect() {
-  const sections = [];
+  // Group terminal output by collection (project)
+  const byCollection = new Map(); // collection -> [{ name, lines }]
   const snapshotCounts = new Map();
   for (const [id, buf] of buffers) {
     if (buf.lines.length === 0) continue;
@@ -66,10 +67,21 @@ function collect() {
     for (const line of buf.lines) {
       if (line !== prev) { deduped.push(line); prev = line; }
     }
-    sections.push(`[${buf.name}]\n${deduped.slice(-200).join('\n')}`);
+    const col = buf.collection || 'unknown';
+    if (!byCollection.has(col)) byCollection.set(col, []);
+    byCollection.get(col).push({ name: buf.name, lines: deduped.slice(-200) });
     snapshotCounts.set(id, buf.lines.length);
   }
-  return { sections, snapshotCounts };
+
+  // Build sections grouped by collection
+  const sections = [];
+  const collections = [];
+  for (const [col, terminals] of byCollection) {
+    collections.push(col);
+    const parts = terminals.map(t => `[${t.name}]\n${t.lines.join('\n')}`);
+    sections.push(`## Project: ${col}\n\n${parts.join('\n\n')}`);
+  }
+  return { sections, collections, snapshotCounts };
 }
 
 function clearCollected(snapshotCounts) {
@@ -119,19 +131,21 @@ function callClaude(prompt) {
 async function summarize() {
   if (!hasContent()) return;
 
-  const { sections, snapshotCounts } = collect();
+  const { sections, collections, snapshotCounts } = collect();
   if (sections.length === 0) return;
 
   const context = sections.join('\n\n---\n\n');
   const now = new Date();
   const time = now.toLocaleTimeString('en-US', { hour12: true, hour: 'numeric', minute: '2-digit' });
+  const multiProject = collections.length > 1;
 
   const prompt = `You are a concise dev journal writer. Given terminal activity from a coding session, write a brief summary of what was worked on. Rules:
-- 2-5 bullet points max, each starting with "- "
+- 2-5 bullet points per project, each starting with "- "
 - Focus on what was accomplished or attempted, not raw commands
 - Mention file names and features when relevant
-- If nothing meaningful happened (just idle, navigation, etc.), respond with exactly: "- Idle"
-- No headers, no timestamps, no markdown formatting beyond bullet points
+${multiProject ? '- Group bullets under each project using the format: **ProjectName** on its own line, followed by bullet points\n- Keep the **ProjectName** headers exactly as given in the "Project:" labels below' : '- Start your response with **ProjectName** (using the project name from below) on its own line, followed by bullet points'}
+- If nothing meaningful happened for a project (just idle, navigation, etc.), omit that project entirely
+- No headers beyond the project names, no timestamps, no other markdown formatting
 
 Terminal activity:
 ${context}`;
@@ -158,8 +172,8 @@ ${context}`;
   } catch (err) {
     console.error('Journal summarize failed:', err.message);
     // Fallback: write a raw activity note so the day isn't empty
-    const termNames = sections.map(s => s.split('\n')[0]).join(', ');
-    const fallback = `### ${time}\n\n- Active in: ${termNames}\n- (auto-summary unavailable)\n\n---\n\n`;
+    const fallbackLines = collections.map(c => `**${c}**\n- Active (auto-summary unavailable)`).join('\n\n');
+    const fallback = `### ${time}\n\n${fallbackLines}\n\n---\n\n`;
     try {
       fs.appendFileSync(journalPath, fallback);
     } catch (_) {}
