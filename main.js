@@ -78,6 +78,7 @@ function createWindow() {
 function destroyAllTerminals() {
   for (const [id, term] of terminals) {
     if (term.convoCheck) clearInterval(term.convoCheck);
+    if (term.autoNameTimer) clearTimeout(term.autoNameTimer);
     try { term.pty.kill(); } catch (_) {}
   }
   terminals.clear();
@@ -87,6 +88,26 @@ function destroyAllTerminals() {
 
 ipcMain.handle('get-home-dir', () => os.homedir());
 ipcMain.handle('get-platform', () => process.platform);
+
+// ── Auto-naming ──
+
+async function autoNameSession(id) {
+  const lines = journal.getBufferLines(id);
+  if (!lines || lines.length < 5) return; // not enough content yet
+
+  const context = lines.join('\n');
+  const prompt = `Given this terminal session output, generate a very short name (2-4 words, lowercase) describing what's being worked on. Examples: "auth bug fix", "api refactor", "test suite", "db migration". Reply with ONLY the name, nothing else.\n\n${context}`;
+
+  try {
+    const result = await journal.callClaude(prompt);
+    const name = result.trim().replace(/["\n]/g, '').substring(0, 40);
+    if (name && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('terminal-auto-name', { id, name });
+    }
+  } catch (_) {
+    // Silent fail - auto-naming is best-effort
+  }
+}
 
 // ── Terminal management ──
 
@@ -187,6 +208,15 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name }) => 
     }, 1000);
   }
 
+  // Auto-name: after 30s, if the session still has a default name, ask Claude to name it
+  let autoNameTimer = null;
+  const isDefaultName = !name || /^Session \d+$/i.test(name);
+  if (isDefaultName) {
+    autoNameTimer = setTimeout(() => {
+      autoNameSession(id);
+    }, 30000);
+  }
+
   terminals.set(id, {
     pty: ptyProcess,
     alive: true,
@@ -194,6 +224,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name }) => 
     beforeConvos,
     projectDir,
     convoCheck,
+    autoNameTimer,
     isWorking: () => {
       return dataBytes > 500 && (Date.now() - windowStart) < 3000;
     },
@@ -219,6 +250,7 @@ ipcMain.on('terminal-destroy', (event, { id }) => {
   const term = terminals.get(id);
   if (term) {
     if (term.convoCheck) clearInterval(term.convoCheck);
+    if (term.autoNameTimer) clearTimeout(term.autoNameTimer);
     try { term.pty.kill(); } catch (_) {}
     terminals.delete(id);
     journal.removeTerminal(id);

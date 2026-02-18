@@ -161,4 +161,10 @@ function stop() {
   summarize().catch(() => {});
 }
 
-module.exports = { feed, removeTerminal, start, stop, summarize, getJournalPath, JOURNAL_DIR };
+function getBufferLines(terminalId) {
+  const buf = buffers.get(terminalId);
+  if (!buf || buf.lines.length === 0) return null;
+  return buf.lines.slice(-100);
+}
+
+module.exports = { feed, removeTerminal, start, stop, summarize, getJournalPath, getBufferLines, callClaude, JOURNAL_DIR };

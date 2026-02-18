@@ -111,6 +111,21 @@ claude.onTerminalData((id, data) => {
   if (inst) inst.terminal.write(data);
 });
 
+// ── Auto-naming ──
+claude.onTerminalAutoName((id, name) => {
+  // Find the tab with this ID and update its name (only if still default)
+  for (const col of state.collections) {
+    for (const tab of col.tabs) {
+      if (tab.id === id && /^Session \d+$/i.test(tab.name)) {
+        tab.name = name;
+        renderCollections();
+        saveState();
+        return;
+      }
+    }
+  }
+});
+
 // ── Collection rendering ──
 function renderCollections() {
   collectionsList.innerHTML = '';

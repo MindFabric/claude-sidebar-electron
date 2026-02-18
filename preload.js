@@ -15,6 +15,9 @@ contextBridge.exposeInMainWorld('claude', {
   onTerminalData: (callback) => {
     ipcRenderer.on('terminal-data', (event, { id, data }) => callback(id, data));
   },
+  onTerminalAutoName: (callback) => {
+    ipcRenderer.on('terminal-auto-name', (event, { id, name }) => callback(id, name));
+  },
 
   // State
   saveState: (state) => ipcRenderer.invoke('save-state', state),
