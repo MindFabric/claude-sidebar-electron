@@ -18,7 +18,10 @@
     "terminal",
     "workspace"
   ],
-  "author": "Claude Sidebar",
+  "author": {
+    "name": "Claude Sidebar",
+    "email": "claude-sidebar@users.noreply.github.com"
+  },
   "license": "MIT",
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
