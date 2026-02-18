@@ -692,6 +692,11 @@ document.addEventListener('keydown', (e) => {
     addCollection(true);
   }
 
+  if (ctrl && e.key === 'y') {
+    e.preventDefault();
+    addCollection(true);
+  }
+
   if (ctrl && e.key === 'g') {
     e.preventDefault();
     if (state.activeCollectionIdx >= 0) {
@@ -1019,7 +1024,7 @@ function escAttr(str) {
     const mod = isMac ? 'Cmd' : 'Ctrl';
     const toggle = isMac ? 'Cmd+Shift+C' : 'Super+C';
     document.getElementById('header-hints').textContent =
-      `${toggle} toggle | ${mod}+T new | ${mod}+P path | ${mod}+W close | ${mod}+G grid | ${mod}+J journal | Alt+1-9 switch`;
+      `${toggle} toggle | ${mod}+T session | ${mod}+Y collection | ${mod}+W close | ${mod}+G grid | ${mod}+J journal | Alt+1-9 switch`;
 
     const loaded = await loadState();
     if (!loaded) {
