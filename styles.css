@@ -227,6 +227,14 @@ body {
   flex-shrink: 0;
 }
 .row-dot.active { color: #4e9a06; }
+.row-idx {
+  color: #333;
+  font-size: 9px;
+  min-width: 12px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.tab-row.selected .row-idx { color: #D97757; opacity: 0.5; }
 .row-label {
   color: #aaa;
   font-size: 12px;

@@ -152,6 +152,7 @@ function renderCollections() {
                data-ci="${ci}" data-ti="${ti}" draggable="true">
             <span class="row-drag" title="Drag to reorder">${'\u2847'}</span>
             <span class="row-dot" data-tabid="${tab.id}">${'\u2022'}</span>
+            <span class="row-idx">${ti + 1}</span>
             <span class="row-label">${escHtml(tab.name)}</span>
             <input class="row-rename" type="text" value="${escAttr(tab.name)}">
             <button class="row-close" data-ci="${ci}" data-ti="${ti}">${'\u2715'}</button>
