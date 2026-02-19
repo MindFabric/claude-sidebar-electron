@@ -27,9 +27,16 @@ contextBridge.exposeInMainWorld('manifold', {
   // Dialogs
   pickFolder: () => ipcRenderer.invoke('pick-folder'),
 
+  // Tool selection
+  detectTools: () => ipcRenderer.invoke('detect-tools'),
+  installTool: (toolKey) => ipcRenderer.invoke('install-tool', toolKey),
+  setSelectedTool: (toolKey) => ipcRenderer.invoke('set-selected-tool', toolKey),
+  getToolConfigs: () => ipcRenderer.invoke('get-tool-configs'),
+
   // Journal
   listJournalDates: () => ipcRenderer.invoke('journal-list-dates'),
   readJournal: (dateStr) => ipcRenderer.invoke('journal-read', dateStr),
+  weeklyExport: () => ipcRenderer.invoke('journal-weekly-export'),
 
   // UI Scale
   setZoomFactor: (factor) => webFrame.setZoomFactor(factor),

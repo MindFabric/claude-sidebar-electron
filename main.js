@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, globalShortcut, Menu, screen, nativeImage } = require('electron');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
@@ -11,12 +11,59 @@ const IS_MAC = process.platform === 'darwin';
 // Set Linux WM_CLASS so desktop environment uses our icon
 if (!IS_WIN && !IS_MAC) app.setName('manifold');
 
-const CLAUDE_CMD = process.env.MANIFOLD_CMD || 'claude --dangerously-skip-permissions';
+const { execSync, exec } = require('child_process');
+
+// ── Tool configuration registry ──
+
+const TOOL_CONFIGS = {
+  claude: {
+    name: 'Claude Code',
+    binary: 'claude',
+    installCmd: 'npm i -g @anthropic-ai/claude-code',
+    autoApproveFlag: '--dangerously-skip-permissions',
+    buildResumeArgs: (id) => `--resume "${id}"`,
+    promptFlag: '-p',
+    conversationTracking: true,
+  },
+  gemini: {
+    name: 'Gemini CLI',
+    binary: 'gemini',
+    installCmd: 'npm i -g @google/gemini-cli',
+    autoApproveFlag: '--approval-mode=yolo',
+    buildResumeArgs: (id) => `--resume "${id}"`,
+    promptFlag: null,
+    conversationTracking: false,
+  },
+  codex: {
+    name: 'Codex CLI',
+    binary: 'codex',
+    installCmd: 'npm i -g codex',
+    autoApproveFlag: '--full-auto',
+    buildResumeArgs: () => null,
+    buildResumeCmd: (id) => `codex resume "${id}"`,
+    promptFlag: null,
+    conversationTracking: false,
+  },
+};
+
+let selectedToolKey = null;
+
+function getToolConfig() {
+  return TOOL_CONFIGS[selectedToolKey] || TOOL_CONFIGS.claude;
+}
+
+function getToolCmd() {
+  if (process.env.MANIFOLD_CMD) return process.env.MANIFOLD_CMD;
+  const tool = getToolConfig();
+  return `${tool.binary} ${tool.autoApproveFlag}`;
+}
+
 const STATE_DIR = path.join(app.getPath('userData'), 'state');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 
 let mainWindow = null;
 const terminals = new Map();
+const claimedConversations = new Set(); // prevent two terminals from claiming the same conversation
 
 // ── Conversation tracking ──
 // Claude stores conversations in ~/.claude/projects/<encoded-path>/<uuid>.jsonl
@@ -57,7 +104,7 @@ function createWindow() {
     width,
     height,
     frame: false,
-    icon: path.join(__dirname, 'icon.png'),
+    icon: nativeImage.createFromPath(path.join(__dirname, 'icon.png')),
     backgroundColor: '#1a1a1a',
     titleBarStyle: IS_MAC ? 'hiddenInset' : 'default',
     webPreferences: {
@@ -94,9 +141,53 @@ function destroyAllTerminals() {
 ipcMain.handle('get-home-dir', () => os.homedir());
 ipcMain.handle('get-platform', () => process.platform);
 
+// ── Tool detection and installation ──
+
+ipcMain.handle('detect-tools', async () => {
+  const whichCmd = IS_WIN ? 'where' : 'which';
+  const results = {};
+  for (const [key, config] of Object.entries(TOOL_CONFIGS)) {
+    try {
+      execSync(`${whichCmd} ${config.binary}`, { stdio: 'ignore', timeout: 5000 });
+      results[key] = true;
+    } catch (_) {
+      results[key] = false;
+    }
+  }
+  return results;
+});
+
+ipcMain.handle('install-tool', async (event, toolKey) => {
+  const config = TOOL_CONFIGS[toolKey];
+  if (!config) return { success: false, error: 'Unknown tool' };
+  return new Promise((resolve) => {
+    exec(config.installCmd, { timeout: 120000 }, (err, stdout, stderr) => {
+      if (err) resolve({ success: false, error: stderr || err.message });
+      else resolve({ success: true });
+    });
+  });
+});
+
+ipcMain.handle('set-selected-tool', (event, toolKey) => {
+  if (!TOOL_CONFIGS[toolKey]) return false;
+  selectedToolKey = toolKey;
+  return true;
+});
+
+ipcMain.handle('get-tool-configs', () => {
+  const configs = {};
+  for (const [key, config] of Object.entries(TOOL_CONFIGS)) {
+    configs[key] = { name: config.name, binary: config.binary };
+  }
+  return configs;
+});
+
 // ── Auto-naming ──
 
 async function autoNameSession(id) {
+  const tool = getToolConfig();
+  if (!tool.promptFlag) return; // tool doesn't support piped prompts
+
   const lines = journal.getBufferLines(id);
   if (!lines || lines.length < 5) return; // not enough content yet
 
@@ -104,7 +195,7 @@ async function autoNameSession(id) {
   const prompt = `Given this terminal session output, generate a very short name (2-4 words, lowercase) describing what's being worked on. Examples: "auth bug fix", "api refactor", "test suite", "db migration". Reply with ONLY the name, nothing else.\n\n${context}`;
 
   try {
-    const result = await journal.callClaude(prompt);
+    const result = await journal.callTool(prompt, tool.binary, tool.promptFlag);
     const name = result.trim().replace(/["\n]/g, '').substring(0, 40);
     if (name && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('terminal-auto-name', { id, name });
@@ -119,27 +210,35 @@ async function autoNameSession(id) {
 ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, collectionName }) => {
   const home = os.homedir();
   const dir = cwd || home;
+  const tool = getToolConfig();
 
   const cleanEnv = { ...process.env, HOME: home };
   delete cleanEnv.CLAUDECODE;
   delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
 
-  // Build Claude command: --resume <id> if we have a conversation ID, otherwise fresh
-  let claudeArgs = CLAUDE_CMD;
-  if (conversationId) {
-    claudeArgs += ` --resume "${conversationId}"`;
+  // Build tool command with resume support
+  let toolArgs;
+  if (conversationId && tool.buildResumeCmd) {
+    // Codex-style: entirely different command for resume
+    toolArgs = tool.buildResumeCmd(conversationId);
+  } else if (conversationId && tool.buildResumeArgs) {
+    const resumePart = tool.buildResumeArgs(conversationId);
+    toolArgs = resumePart ? `${getToolCmd()} ${resumePart}` : getToolCmd();
+  } else {
+    toolArgs = getToolCmd();
   }
 
-  // Snapshot existing conversations before launching
-  const projectDir = getProjectDir(dir);
-  const beforeConvos = new Set(listConversations(projectDir));
+  // Conversation tracking (Claude-only: watches ~/.claude/projects/)
+  const shouldTrackConvos = tool.conversationTracking;
+  const projectDir = shouldTrackConvos ? getProjectDir(dir) : null;
+  const beforeConvos = shouldTrackConvos ? new Set(listConversations(projectDir)) : new Set();
 
   let ptyProcess;
 
   if (IS_WIN) {
     const wslDir = winToWslPath(dir);
-    const claudeArg = `cd "${wslDir}" && ${claudeArgs}; exec bash`;
-    ptyProcess = pty.spawn('wsl.exe', ['bash', '-c', claudeArg], {
+    const shellCmd = `cd "${wslDir}" && ${toolArgs}; exec bash`;
+    ptyProcess = pty.spawn('wsl.exe', ['bash', '-c', shellCmd], {
       name: 'xterm-256color',
       cols: 120,
       rows: 30,
@@ -148,7 +247,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, colle
     });
   } else {
     const shell = process.env.SHELL || '/bin/bash';
-    const cmd = `cd "${dir}" && ${claudeArgs}`;
+    const cmd = `cd "${dir}" && ${toolArgs}`;
     ptyProcess = pty.spawn(shell, ['-c', `${cmd}; exec ${shell}`], {
       name: 'xterm-256color',
       cols: 120,
@@ -161,6 +260,10 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, colle
   let dataBytes = 0;
   let windowStart = Date.now();
   let detectedConvoId = conversationId || null;
+  const spawnTime = Date.now();
+
+  // Claim the conversation ID so no other terminal can steal it
+  if (conversationId) claimedConversations.add(conversationId);
 
   ptyProcess.onData((data) => {
     const now = Date.now();
@@ -186,37 +289,40 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, colle
     }
   });
 
-  // Poll for new conversation file if we don't already have an ID
+  // Poll for new conversation file if we don't already have an ID (Claude-only)
   let convoCheck = null;
-  if (!conversationId) {
+  if (!conversationId && shouldTrackConvos) {
     let checks = 0;
     convoCheck = setInterval(() => {
       checks++;
       const afterConvos = listConversations(projectDir);
-      const newConvos = afterConvos.filter(c => !beforeConvos.has(c));
+      // Filter to conversations that are new AND not claimed by another terminal
+      const newConvos = afterConvos.filter(c => !beforeConvos.has(c) && !claimedConversations.has(c));
       if (newConvos.length > 0) {
-        // Pick the newest (most recently modified)
-        let newest = newConvos[0];
-        let newestTime = 0;
+        // Pick the conversation created closest to (but after) this terminal's spawn time
+        let best = newConvos[0];
+        let bestTime = Infinity;
         for (const c of newConvos) {
           try {
             const stat = fs.statSync(path.join(projectDir, c + '.jsonl'));
-            if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = c; }
+            const age = Math.abs(stat.birthtimeMs - spawnTime);
+            if (age < bestTime) { bestTime = age; best = c; }
           } catch (_) {}
         }
-        detectedConvoId = newest;
+        detectedConvoId = best;
+        claimedConversations.add(best);
         const term = terminals.get(id);
-        if (term) term.conversationId = newest;
+        if (term) term.conversationId = best;
         clearInterval(convoCheck);
       }
-      if (checks > 30) clearInterval(convoCheck); // Stop after 30s
+      if (checks > 30) clearInterval(convoCheck);
     }, 1000);
   }
 
-  // Auto-name: after 30s, if the session still has a default name, ask Claude to name it
+  // Auto-name: after 30s, if the session still has a default name
   let autoNameTimer = null;
   const isDefaultName = !name || /^Session \d+$/i.test(name);
-  if (isDefaultName) {
+  if (isDefaultName && tool.promptFlag) {
     autoNameTimer = setTimeout(() => {
       autoNameSession(id);
     }, 30000);
@@ -226,6 +332,7 @@ ipcMain.handle('terminal-create', (event, { id, cwd, conversationId, name, colle
     pty: ptyProcess,
     alive: true,
     conversationId: detectedConvoId,
+    spawnTime,
     beforeConvos,
     projectDir,
     convoCheck,
@@ -254,6 +361,7 @@ ipcMain.on('terminal-resize', (event, { id, cols, rows }) => {
 ipcMain.on('terminal-destroy', (event, { id }) => {
   const term = terminals.get(id);
   if (term) {
+    if (term.conversationId) claimedConversations.delete(term.conversationId);
     if (term.convoCheck) clearInterval(term.convoCheck);
     if (term.autoNameTimer) clearTimeout(term.autoNameTimer);
     try { term.pty.kill(); } catch (_) {}
@@ -276,22 +384,24 @@ ipcMain.handle('terminal-get-conversation-id', (event, { id }) => {
   // If we already have it, return it
   if (term.conversationId) return term.conversationId;
 
-  // Lazy detection: check for new conversation files since launch
+  // Lazy detection: check for new conversation files since launch (exclude already-claimed)
   if (term.beforeConvos && term.projectDir) {
     const afterConvos = listConversations(term.projectDir);
-    const newConvos = afterConvos.filter(c => !term.beforeConvos.has(c));
+    const newConvos = afterConvos.filter(c => !term.beforeConvos.has(c) && !claimedConversations.has(c));
     if (newConvos.length > 0) {
-      // Pick the most recently modified
-      let newest = newConvos[0];
-      let newestTime = 0;
+      // Pick the conversation created closest to this terminal's spawn time
+      let best = newConvos[0];
+      let bestTime = Infinity;
       for (const c of newConvos) {
         try {
           const stat = fs.statSync(path.join(term.projectDir, c + '.jsonl'));
-          if (stat.mtimeMs > newestTime) { newestTime = stat.mtimeMs; newest = c; }
+          const age = Math.abs(stat.birthtimeMs - (term.spawnTime || 0));
+          if (age < bestTime) { bestTime = age; best = c; }
         } catch (_) {}
       }
-      term.conversationId = newest;
-      return newest;
+      term.conversationId = best;
+      claimedConversations.add(best);
+      return best;
     }
   }
 
@@ -314,7 +424,11 @@ ipcMain.handle('save-state', (event, state) => {
 ipcMain.handle('load-state', () => {
   try {
     const data = fs.readFileSync(STATE_FILE, 'utf-8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (parsed && parsed.selectedTool && TOOL_CONFIGS[parsed.selectedTool]) {
+      selectedToolKey = parsed.selectedTool;
+    }
+    return parsed;
   } catch (e) {
     return null;
   }
@@ -355,6 +469,70 @@ ipcMain.handle('journal-read', (event, dateStr) => {
     return fs.readFileSync(filePath, 'utf-8');
   } catch (_) {
     return null;
+  }
+});
+
+// Weekly export: collect last 7 days of journal entries, summarize into a clean report
+ipcMain.handle('journal-weekly-export', async () => {
+  const tool = getToolConfig();
+  const today = new Date();
+  const entries = [];
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(d.getDate() - i);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
+    const filePath = path.join(journal.JOURNAL_DIR, `${year}-${month}`, `${dateStr}.md`);
+    try {
+      if (fs.existsSync(filePath)) {
+        const content = fs.readFileSync(filePath, 'utf-8');
+        entries.push({ date: dateStr, content });
+      }
+    } catch (_) {}
+  }
+
+  if (entries.length === 0) {
+    return { success: false, error: 'No journal entries in the last 7 days.' };
+  }
+
+  // Build date range label
+  const oldest = entries[entries.length - 1].date;
+  const newest = entries[0].date;
+
+  const rawContent = entries
+    .reverse()
+    .map(e => e.content)
+    .join('\n\n---\n\n');
+
+  // If tool supports prompt mode, summarize; otherwise return raw
+  if (tool.promptFlag) {
+    const prompt = `You are writing a weekly development summary report. Below are daily dev journal entries from the past week. Produce a clean, well-structured markdown report with:
+
+1. A title: "# Weekly Report: ${oldest} to ${newest}"
+2. An "## Overview" section with a 2-3 sentence summary of the week
+3. A "## Projects" section grouping work by project with bullet points of key accomplishments
+4. A "## Key Changes" section listing the most significant files, features, or fixes touched
+5. Keep it concise — this is a summary, not a copy of the raw entries
+
+Raw journal entries:
+
+${rawContent}`;
+
+    try {
+      const result = await journal.callTool(prompt, tool.binary, tool.promptFlag);
+      return { success: true, markdown: result.trim(), startDate: oldest, endDate: newest };
+    } catch (err) {
+      // Fallback to raw if summarization fails
+      const fallback = `# Weekly Report: ${oldest} to ${newest}\n\n${rawContent}`;
+      return { success: true, markdown: fallback, startDate: oldest, endDate: newest };
+    }
+  } else {
+    // No prompt support — return raw entries as-is
+    const fallback = `# Weekly Report: ${oldest} to ${newest}\n\n${rawContent}`;
+    return { success: true, markdown: fallback, startDate: oldest, endDate: newest };
   }
 });
 
@@ -415,7 +593,7 @@ app.whenReady().then(() => {
   }
 
   createWindow();
-  journal.start();
+  journal.start(getToolConfig);
 
   const toggleKey = IS_MAC ? 'Command+Shift+C' : 'Super+C';
   globalShortcut.register(toggleKey, () => {

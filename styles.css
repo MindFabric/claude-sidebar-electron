@@ -74,12 +74,11 @@ body {
   font-weight: bold;
 }
 #sidebar-btn-row {
-  display: flex;
-  gap: 6px;
-  margin: 6px 8px;
+  padding: 6px 8px;
+  flex-shrink: 0;
 }
 .new-tab-btn {
-  flex: 1;
+  width: 100%;
   color: #D97757;
   font-weight: bold;
   padding: 6px 8px;
@@ -338,9 +337,18 @@ body {
 #terminal-single {
   position: absolute;
   inset: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+#terminal-single .terminal-container {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 #terminal-single .xterm {
   height: 100%;
+  overflow: hidden;
 }
 #terminal-grid {
   position: absolute;
@@ -406,65 +414,6 @@ body {
   height: 100% !important;
 }
 
-/* ── Mic toggle ── */
-#mic-box {
-  background: #141414;
-  border-top: 1px solid #2a2a2a;
-  padding: 8px;
-  flex-shrink: 0;
-}
-#mic-device-label {
-  color: #444;
-  font-size: 9px;
-  margin-bottom: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-#mic-row {
-  display: flex;
-  gap: 4px;
-}
-.mic-btn {
-  flex: 1;
-  color: #555;
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: bold;
-  padding: 8px;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
-  background: #1a1a1a;
-  cursor: pointer;
-}
-.mic-btn:hover {
-  border-color: #444;
-  color: #888;
-}
-.mic-btn.on {
-  color: #e74c3c;
-  border-color: #e74c3c;
-  background: #1e1414;
-}
-.mic-btn.on:hover {
-  color: #ff6b5b;
-  border-color: #ff6b5b;
-}
-.mic-cfg-btn {
-  color: #555;
-  font-size: 14px;
-  padding: 8px 6px;
-  min-width: 30px;
-  border: 1px solid #2a2a2a;
-  border-radius: 6px;
-  background: #1a1a1a;
-  cursor: pointer;
-}
-.mic-cfg-btn:hover {
-  color: #D97757;
-  border-color: #444;
-}
-
 /* ── Journal viewer ── */
 #journal-overlay {
   position: absolute;
@@ -501,6 +450,30 @@ body {
   font-weight: bold;
   font-size: 12px;
   letter-spacing: 2px;
+}
+#journal-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#journal-export-btn {
+  color: #888;
+  background: #141414;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: inherit;
+  font-size: 10px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+#journal-export-btn:hover {
+  color: #D97757;
+  border-color: #D97757;
+}
+#journal-export-btn.exporting {
+  color: #D97757;
+  pointer-events: none;
 }
 #journal-close-btn {
   color: #555;
@@ -894,6 +867,120 @@ body {
 }
 .settings-about-version {
   color: #444;
+  font-size: 10px;
+}
+
+/* ── Tool selector modal ── */
+#tool-selector-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+#tool-selector-modal {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 12px;
+  width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+#tool-selector-header {
+  padding: 18px 24px 12px;
+  border-bottom: 1px solid #2a2a2a;
+}
+#tool-selector-title {
+  color: #D97757;
+  font-weight: bold;
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+#tool-selector-body {
+  padding: 16px 24px 24px;
+}
+#tool-selector-desc {
+  color: #666;
+  font-size: 11px;
+  margin: 0 0 16px;
+}
+#tool-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tool-card {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  background: #141414;
+  border: 2px solid #222;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.tool-card:hover {
+  background: #1e1e1e;
+  border-color: #444;
+}
+.tool-card.selected {
+  border-color: #D97757;
+  background: #1e1814;
+}
+.tool-card-info {
+  flex: 1;
+}
+.tool-card-name {
+  color: #d0d0d0;
+  font-size: 13px;
+  font-weight: bold;
+  display: block;
+  margin-bottom: 2px;
+}
+.tool-card-binary {
+  color: #555;
+  font-size: 10px;
+}
+.tool-card-status {
+  color: #4e9a06;
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-left: 12px;
+}
+.tool-card-status.not-installed {
+  color: #666;
+}
+#tool-install-status {
+  margin-top: 16px;
+  padding: 10px 12px;
+  background: #141414;
+  border: 1px solid #222;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #D97757;
+  font-size: 11px;
+}
+#tool-install-spinner {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+#tool-install-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: #1e1414;
+  border: 1px solid #e74c3c33;
+  border-radius: 8px;
+  color: #e74c3c;
   font-size: 10px;
 }
 

@@ -44,6 +44,7 @@
       "renderer.js",
       "index.html",
       "styles.css",
+      "icon.png",
       "node_modules/@xterm/**/*",
       "node_modules/node-pty/**/*"
     ],

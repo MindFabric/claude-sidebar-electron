@@ -94,13 +94,16 @@ function clearCollected(snapshotCounts) {
   }
 }
 
-function callClaude(prompt) {
+function callTool(prompt, binary, promptFlag) {
+  if (!binary || !promptFlag) {
+    return Promise.reject(new Error('Tool does not support prompt mode'));
+  }
   return new Promise((resolve, reject) => {
     const cleanEnv = { ...process.env };
     delete cleanEnv.CLAUDECODE;
     delete cleanEnv.CLAUDE_CODE_ENTRYPOINT;
 
-    const proc = spawn('claude', ['-p'], {
+    const proc = spawn(binary, [promptFlag], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: cleanEnv,
     });
@@ -112,13 +115,13 @@ function callClaude(prompt) {
 
     const timeout = setTimeout(() => {
       proc.kill();
-      reject(new Error('Claude timed out'));
+      reject(new Error(`${binary} timed out`));
     }, 60000);
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
       if (code === 0) resolve(stdout);
-      else reject(new Error(`Claude exited ${code}: ${stderr}`));
+      else reject(new Error(`${binary} exited ${code}: ${stderr}`));
     });
 
     proc.on('error', (err) => {
@@ -126,14 +129,21 @@ function callClaude(prompt) {
       reject(err);
     });
 
-    // Pipe prompt via stdin instead of CLI argument to handle large output
     proc.stdin.write(prompt);
     proc.stdin.end();
   });
 }
 
+let toolConfigGetter = null;
+
 async function summarize() {
   if (!hasContent()) return;
+
+  const tool = toolConfigGetter ? toolConfigGetter() : { binary: 'claude', promptFlag: '-p' };
+  if (!tool.promptFlag) {
+    // Tool doesn't support piped prompts — skip summarization
+    return;
+  }
 
   const { sections, collections, snapshotCounts } = collect();
   if (sections.length === 0) return;
@@ -166,30 +176,28 @@ ${context}`;
   }
 
   try {
-    const result = await callClaude(prompt);
+    const result = await callTool(prompt, tool.binary, tool.promptFlag);
     if (result && result.trim() && result.trim() !== '- Idle') {
       const entry = `### ${time}\n\n${result.trim()}\n\n---\n\n`;
       fs.appendFileSync(journalPath, entry);
     }
-    // Only clear buffers after successful summarization
     clearCollected(snapshotCounts);
   } catch (err) {
     console.error('Journal summarize failed:', err.message);
-    // Fallback: write a raw activity note so the day isn't empty
     const fallbackLines = collections.map(c => `**${c}**\n- Active (auto-summary unavailable)`).join('\n\n');
     const fallback = `### ${time}\n\n${fallbackLines}\n\n---\n\n`;
     try {
       fs.appendFileSync(journalPath, fallback);
     } catch (_) {}
-    // Still clear buffers to avoid infinite retry of the same failing data
     clearCollected(snapshotCounts);
   }
 }
 
 let intervalId = null;
 
-function start() {
+function start(getToolConfig) {
   if (intervalId) return;
+  if (getToolConfig) toolConfigGetter = getToolConfig;
   intervalId = setInterval(() => {
     summarize().catch(err => console.error('Journal error:', err.message));
   }, SUMMARIZE_INTERVAL);
@@ -210,4 +218,4 @@ function getBufferLines(terminalId) {
   return buf.lines.slice(-100);
 }
 
-module.exports = { feed, removeTerminal, start, stop, summarize, getJournalPath, getBufferLines, callClaude, JOURNAL_DIR };
+module.exports = { feed, removeTerminal, start, stop, summarize, getJournalPath, getBufferLines, callTool, JOURNAL_DIR };

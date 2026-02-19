@@ -8,6 +8,11 @@ if (!FitAddon) console.error('FitAddon not loaded!');
 // Home directory - resolved async at startup
 let homeDir = '/';
 
+// Selected CLI tool: 'claude' | 'gemini' | 'codex'
+let currentTool = null;
+
+const TOOL_NAMES = { claude: 'Claude Code', gemini: 'Gemini CLI', codex: 'Codex CLI' };
+
 // ── State ──
 const state = {
   collections: [],
@@ -36,6 +41,15 @@ function getActiveTab() {
   const col = getActiveCollection();
   if (!col) return null;
   return col.tabs[state.activeTabIdx] || null;
+}
+
+// ── Terminal helpers ──
+function fitTerminal(tabId) {
+  const inst = terminalInstances.get(tabId);
+  if (!inst) return;
+  inst.fitAddon.fit();
+  manifold.resizeTerminal(tabId, inst.terminal.cols, inst.terminal.rows);
+  inst.terminal.scrollToBottom();
 }
 
 // ── Terminal creation ──
@@ -84,11 +98,10 @@ function createTerminalInstance(tabId, cwd, conversationId, name, collectionName
   // Pipe input to pty
   term.onData((data) => manifold.sendInput(tabId, data));
 
-  // Open terminal (deferred to let DOM settle)
+  // Open terminal (double RAF to let DOM fully settle before measuring)
   requestAnimationFrame(() => {
     term.open(el);
-    fitAddon.fit();
-    manifold.resizeTerminal(tabId, term.cols, term.rows);
+    requestAnimationFrame(() => fitTerminal(tabId));
   });
 
   return { terminal: term, fitAddon, element: el };
@@ -173,7 +186,7 @@ function renderCollections() {
 }
 
 function bindCollectionEvents() {
-  // Collection header click (expand/collapse)
+  // Collection header click — if gridded, switch to it; otherwise expand/collapse
   document.querySelectorAll('.collection-header').forEach((el) => {
     let clickTimer = null;
     el.addEventListener('click', (e) => {
@@ -183,7 +196,15 @@ function bindCollectionEvents() {
       clickTimer = setTimeout(() => {
         clickTimer = null;
         const ci = parseInt(el.dataset.ci);
-        state.collections[ci].expanded = !state.collections[ci].expanded;
+        if (state.gridCollection === ci && state.activeCollectionIdx !== ci) {
+          // Grid is on for this collection — switch to it
+          const col = state.collections[ci];
+          if (col.tabs.length > 0) {
+            selectTab(ci, 0);
+          }
+        } else {
+          state.collections[ci].expanded = !state.collections[ci].expanded;
+        }
         renderCollections();
       }, 250);
     });
@@ -298,7 +319,8 @@ function bindCollectionEvents() {
 
       const col = state.collections[srcCi];
       const [moved] = col.tabs.splice(srcTi, 1);
-      const insertAt = srcTi < dstTi ? dstTi : dstTi;
+      // After splice, indices above srcTi shift down by 1
+      const insertAt = srcTi < dstTi ? dstTi - 1 : dstTi;
       col.tabs.splice(insertAt, 0, moved);
 
       // Update active tab index if needed
@@ -353,10 +375,6 @@ function bindCollectionEvents() {
 
 // ── Tab selection ──
 function selectTab(ci, ti) {
-  if (state.gridCollection !== null && state.gridCollection !== ci) {
-    exitGridMode();
-  }
-
   state.activeCollectionIdx = ci;
   state.activeTabIdx = ti;
 
@@ -367,10 +385,14 @@ function selectTab(ci, ti) {
   const row = document.querySelector(`.tab-row[data-ci="${ci}"][data-ti="${ti}"]`);
   if (row) row.classList.add('selected');
 
-  if (state.gridCollection === null) {
-    showSingleTerminal(tab.id);
-  } else {
+  if (state.gridCollection === ci) {
+    // This collection has grid on — show grid view
+    showGridView(ci);
     highlightGridCell(tab.id);
+  } else {
+    // Different collection or no grid — show single terminal
+    hideGridView();
+    showSingleTerminal(tab.id);
   }
 }
 
@@ -385,10 +407,12 @@ function showSingleTerminal(tabId) {
       terminalSingle.appendChild(inst.element);
     }
     inst.element.style.display = '';
+    // Double RAF: first lets browser recalc layout, second measures correctly
     requestAnimationFrame(() => {
-      inst.fitAddon.fit();
-      manifold.resizeTerminal(tabId, inst.terminal.cols, inst.terminal.rows);
-      inst.terminal.focus();
+      requestAnimationFrame(() => {
+        fitTerminal(tabId);
+        inst.terminal.focus();
+      });
     });
   }
 }
@@ -411,7 +435,7 @@ function addSession(ci, cwd = null) {
   if (!col) return;
 
   const wasGridded = state.gridCollection === ci;
-  if (wasGridded) exitGridMode();
+  if (wasGridded) hideGridView();
 
   const tabId = genTabId();
   const dir = cwd || col.path;
@@ -424,7 +448,7 @@ function addSession(ci, cwd = null) {
   selectTab(ci, col.tabs.length - 1);
   renderCollections();
 
-  if (wasGridded) enterGridMode(ci);
+  if (wasGridded) showGridView(ci);
   saveState();
 }
 
@@ -437,11 +461,16 @@ function closeSession(ci, ti) {
   if (!tab) return;
 
   const wasGridded = state.gridCollection === ci;
-  if (wasGridded) exitGridMode();
+  if (wasGridded) hideGridView();
 
   destroyTerminalInstance(tab.id);
 
   col.tabs.splice(ti, 1);
+
+  // If this collection is now empty, clear its grid flag
+  if (col.tabs.length === 0 && state.gridCollection === ci) {
+    state.gridCollection = null;
+  }
 
   if (ci === state.activeCollectionIdx) {
     if (col.tabs.length > 0) {
@@ -457,7 +486,7 @@ function closeSession(ci, ti) {
     }
   }
 
-  if (wasGridded && col.tabs.length > 0) enterGridMode(ci);
+  if (wasGridded && col.tabs.length > 0) showGridView(ci);
   renderCollections();
   saveState();
 }
@@ -495,7 +524,10 @@ async function addCollection(askPath = false) {
 function deleteCollection(ci) {
   if (state.collections.length <= 1) return;
 
-  if (state.gridCollection === ci) exitGridMode();
+  if (state.gridCollection === ci) {
+    hideGridView();
+    state.gridCollection = null;
+  }
 
   const col = state.collections[ci];
 
@@ -527,21 +559,41 @@ function deleteCollection(ci) {
 }
 
 // ── Grid view ──
+// gridCollection is a sticky flag — it persists when navigating to other collections.
+// showGridView/hideGridView handle the DOM; toggleGrid sets the flag.
+
 function toggleGrid(ci) {
   if (state.gridCollection === ci) {
-    exitGridMode();
+    // Turn grid off for this collection
+    state.gridCollection = null;
+    hideGridView();
+    const tab = getActiveTab();
+    if (tab) showSingleTerminal(tab.id);
   } else {
-    if (state.gridCollection !== null) exitGridMode();
-    enterGridMode(ci);
+    // Turn grid on (clears any previous grid)
+    hideGridView();
+    state.gridCollection = ci;
+    state.activeCollectionIdx = ci;
+    if (state.collections[ci].tabs.length > 0) {
+      state.activeTabIdx = Math.min(state.activeTabIdx, state.collections[ci].tabs.length - 1);
+      if (state.activeTabIdx < 0) state.activeTabIdx = 0;
+    }
+    showGridView(ci);
   }
   renderCollections();
 }
 
-function enterGridMode(ci) {
+function showGridView(ci) {
   const col = state.collections[ci];
   if (!col || !col.tabs.length) return;
 
-  state.gridCollection = ci;
+  // Detach any terminals currently in the grid
+  for (const [, inst] of terminalInstances) {
+    if (inst.element.parentNode && inst.element.closest('#terminal-grid')) {
+      inst.element.parentNode.removeChild(inst.element);
+    }
+  }
+
   terminalSingle.classList.add('hidden');
   terminalGrid.classList.remove('hidden');
   terminalGrid.innerHTML = '';
@@ -577,13 +629,11 @@ function enterGridMode(ci) {
 
     const inst = terminalInstances.get(tab.id);
     if (inst) {
-      // Detach from previous parent (terminalSingle) before moving to grid cell
       if (inst.element.parentNode) inst.element.parentNode.removeChild(inst.element);
       inst.element.style.display = '';
       cell.appendChild(inst.element);
       requestAnimationFrame(() => {
-        inst.fitAddon.fit();
-        manifold.resizeTerminal(tab.id, inst.terminal.cols, inst.terminal.rows);
+        requestAnimationFrame(() => fitTerminal(tab.id));
       });
     }
 
@@ -591,26 +641,16 @@ function enterGridMode(ci) {
   });
 }
 
-function exitGridMode() {
-  if (state.gridCollection === null) return;
-
-  // Detach all terminal elements from grid cells BEFORE clearing grid
-  // so they aren't orphaned when grid-cell divs are destroyed
+function hideGridView() {
+  // Detach all terminal elements from grid cells before clearing
   for (const [, inst] of terminalInstances) {
     if (inst.element.parentNode && inst.element.closest('#terminal-grid')) {
       inst.element.parentNode.removeChild(inst.element);
     }
   }
-
-  state.gridCollection = null;
   terminalGrid.classList.add('hidden');
   terminalGrid.innerHTML = '';
   terminalSingle.classList.remove('hidden');
-
-  const tab = getActiveTab();
-  if (tab) showSingleTerminal(tab.id);
-
-  renderCollections();
 }
 
 // ── State persistence ──
@@ -626,6 +666,7 @@ async function saveState() {
   });
 
   const data = {
+    selectedTool: currentTool,
     collections: state.collections.map((col) => ({
       name: col.name,
       path: col.path,
@@ -641,50 +682,6 @@ async function saveState() {
     uiScale: parseInt(scaleSlider.value) || 100,
   };
   await manifold.saveState(data);
-}
-
-async function loadState() {
-  const data = await manifold.loadState();
-  if (!data || !data.collections || !data.collections.length) return false;
-
-  for (let ci = 0; ci < data.collections.length; ci++) {
-    const colData = data.collections[ci];
-    // Skip any leftover System collections from old state
-    if (colData.isSystem || colData.name === 'System') continue;
-
-    const col = {
-      name: colData.name || `Collection ${ci + 1}`,
-      path: colData.path || homeDir || '/',
-      expanded: colData.expanded !== false,
-      tabs: [],
-    };
-
-    const tabs = colData.tabs && colData.tabs.length > 0
-      ? colData.tabs
-      : [{ name: 'Session 1', cwd: col.path }];
-
-    for (const tabData of tabs) {
-      const tabId = genTabId();
-      const cwd = tabData.cwd || col.path;
-      col.tabs.push({
-        id: tabId,
-        name: tabData.name || 'Session',
-        cwd,
-        conversationId: tabData.conversationId || null,
-      });
-      // Resume specific conversation if we have its ID, otherwise start fresh
-      createTerminalInstance(tabId, cwd, tabData.conversationId || null, tabData.name || 'Session', col.name);
-    }
-
-    state.collections.push(col);
-  }
-
-  if (state.collections.length === 0) return false;
-
-  return {
-    activeCollection: data.activeCollection || 0,
-    activeTab: data.activeTab || 0,
-  };
 }
 
 // ── Keybindings ──
@@ -756,16 +753,14 @@ document.addEventListener('keydown', (e) => {
     }
   }
 
-  // Alt+1-9: switch globally across all collections
+  // Alt+1-9: switch tabs within active collection (same as Ctrl+1-9)
   if (e.altKey && e.key >= '1' && e.key <= '9') {
-    const idx = parseInt(e.key) - 1;
-    let count = 0;
-    for (let ci = 0; ci < state.collections.length; ci++) {
-      for (let ti = 0; ti < state.collections[ci].tabs.length; ti++) {
-        if (count === idx) { selectTab(ci, ti); handled = true; break; }
-        count++;
+    const ci = state.activeCollectionIdx;
+    if (ci >= 0 && state.collections[ci]) {
+      const ti = parseInt(e.key) - 1;
+      if (ti < state.collections[ci].tabs.length) {
+        selectTab(ci, ti);
       }
-      if (handled) break;
     }
     handled = true;
   }
@@ -796,35 +791,25 @@ setInterval(saveState, 30000);
 manifold.onSaveState(() => saveState());
 
 // ── Resize handler ──
+let resizeTimer = null;
 window.addEventListener('resize', () => {
-  const tab = getActiveTab();
-  if (tab && state.gridCollection === null) {
-    const inst = terminalInstances.get(tab.id);
-    if (inst) {
-      inst.fitAddon.fit();
-      manifold.resizeTerminal(tab.id, inst.terminal.cols, inst.terminal.rows);
-    }
-  }
-  if (state.gridCollection !== null) {
-    const col = state.collections[state.gridCollection];
-    if (col) {
-      col.tabs.forEach((t) => {
-        const inst = terminalInstances.get(t.id);
-        if (inst) {
-          inst.fitAddon.fit();
-          manifold.resizeTerminal(t.id, inst.terminal.cols, inst.terminal.rows);
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (state.gridCollection === null) {
+          const tab = getActiveTab();
+          if (tab) fitTerminal(tab.id);
+        } else {
+          const col = state.collections[state.gridCollection];
+          if (col) col.tabs.forEach((t) => fitTerminal(t.id));
         }
       });
-    }
-  }
+    });
+  }, 50);
 });
 
 // ── Button events ──
-document.getElementById('btn-new-session').addEventListener('click', () => {
-  const ci = state.activeCollectionIdx >= 0 ? state.activeCollectionIdx : 0;
-  if (state.collections[ci]) addSession(ci);
-});
-
 document.getElementById('btn-new-collection').addEventListener('click', () => {
   addCollection(true).catch(err => console.error('addCollection failed:', err));
 });
@@ -833,7 +818,13 @@ document.getElementById('btn-new-collection').addEventListener('click', () => {
 const settingsOverlay = document.getElementById('settings-overlay');
 
 document.getElementById('settings-btn').addEventListener('click', () => {
+  document.getElementById('settings-tool-name').textContent = TOOL_NAMES[currentTool] || 'Not selected';
   settingsOverlay.classList.toggle('hidden');
+});
+
+document.getElementById('tool-change-btn').addEventListener('click', async () => {
+  settingsOverlay.classList.add('hidden');
+  await showToolSelector();
 });
 document.getElementById('settings-close-btn').addEventListener('click', () => {
   settingsOverlay.classList.add('hidden');
@@ -982,17 +973,23 @@ async function selectJournalDate(dateStr) {
 }
 
 // Simple markdown renderer for journal entries
+function inlineMarkdown(escaped) {
+  return escaped
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/`(.+?)`/g, '<code>$1</code>');
+}
+
 function renderMarkdown(md) {
   return md
     .split('\n')
     .map(line => {
-      if (/^### (.+)/.test(line)) return `<h3>${escHtml(line.replace(/^### /, ''))}</h3>`;
-      if (/^## (.+)/.test(line)) return `<h2>${escHtml(line.replace(/^## /, ''))}</h2>`;
-      if (/^# (.+)/.test(line)) return `<h1>${escHtml(line.replace(/^# /, ''))}</h1>`;
+      if (/^### (.+)/.test(line)) return `<h3>${inlineMarkdown(escHtml(line.replace(/^### /, '')))}</h3>`;
+      if (/^## (.+)/.test(line)) return `<h2>${inlineMarkdown(escHtml(line.replace(/^## /, '')))}</h2>`;
+      if (/^# (.+)/.test(line)) return `<h1>${inlineMarkdown(escHtml(line.replace(/^# /, '')))}</h1>`;
       if (/^---\s*$/.test(line)) return '<hr>';
-      if (/^- (.+)/.test(line)) return `<li>${escHtml(line.replace(/^- /, ''))}</li>`;
+      if (/^- (.+)/.test(line)) return `<li>${inlineMarkdown(escHtml(line.replace(/^- /, '')))}</li>`;
       if (line.trim() === '') return '';
-      return `<p>${escHtml(line)}</p>`;
+      return `<p>${inlineMarkdown(escHtml(line))}</p>`;
     })
     .join('\n')
     // Wrap consecutive <li> in <ul>
@@ -1018,7 +1015,40 @@ document.getElementById('journal-cal-next').addEventListener('click', () => {
   renderJournalCalendar();
 });
 
-// Journal header buttons
+// Weekly export
+document.getElementById('journal-export-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('journal-export-btn');
+  const origText = btn.textContent;
+  btn.textContent = 'Exporting...';
+  btn.classList.add('exporting');
+
+  try {
+    const result = await manifold.weeklyExport();
+    if (!result.success) {
+      btn.textContent = result.error || 'No entries found';
+      setTimeout(() => { btn.textContent = origText; btn.classList.remove('exporting'); }, 2500);
+      return;
+    }
+
+    // Trigger download via blob
+    const blob = new Blob([result.markdown], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `weekly-report-${result.startDate}-to-${result.endDate}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    btn.textContent = 'Exported!';
+    setTimeout(() => { btn.textContent = origText; btn.classList.remove('exporting'); }, 2000);
+  } catch (err) {
+    console.error('Weekly export failed:', err);
+    btn.textContent = 'Export failed';
+    setTimeout(() => { btn.textContent = origText; btn.classList.remove('exporting'); }, 2500);
+  }
+});
 
 // ── UI Scale slider ──
 const scaleSlider = document.getElementById('scale-slider');
@@ -1031,12 +1061,11 @@ function applyScale(pct) {
   scaleSlider.value = pct;
   // Refit all visible terminals after zoom settles
   requestAnimationFrame(() => {
-    for (const [tabId, inst] of terminalInstances) {
-      try {
-        inst.fitAddon.fit();
-        manifold.resizeTerminal(tabId, inst.terminal.cols, inst.terminal.rows);
-      } catch (_) {}
-    }
+    requestAnimationFrame(() => {
+      for (const [tabId] of terminalInstances) {
+        try { fitTerminal(tabId); } catch (_) {}
+      }
+    });
   });
 }
 
@@ -1070,6 +1099,151 @@ function escAttr(str) {
   return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
 }
 
+// ── Tool selector ──
+
+async function showToolSelector() {
+  return new Promise(async (resolve) => {
+    const overlay = document.getElementById('tool-selector-overlay');
+    const cardsContainer = document.getElementById('tool-cards');
+    const installStatus = document.getElementById('tool-install-status');
+    const installText = document.getElementById('tool-install-text');
+    const installError = document.getElementById('tool-install-error');
+
+    const [installed, configs] = await Promise.all([
+      manifold.detectTools(),
+      manifold.getToolConfigs(),
+    ]);
+
+    cardsContainer.innerHTML = '';
+    installStatus.classList.add('hidden');
+    installError.classList.add('hidden');
+
+    for (const [key, config] of Object.entries(configs)) {
+      const card = document.createElement('div');
+      card.className = 'tool-card';
+      card.dataset.tool = key;
+      card.innerHTML = `
+        <div class="tool-card-info">
+          <span class="tool-card-name">${escHtml(config.name)}</span>
+          <span class="tool-card-binary">${escHtml(config.binary)}</span>
+        </div>
+        <span class="tool-card-status ${installed[key] ? '' : 'not-installed'}">
+          ${installed[key] ? 'installed' : 'not installed'}
+        </span>
+      `;
+
+      card.addEventListener('click', async () => {
+        // Disable all cards during processing
+        cardsContainer.querySelectorAll('.tool-card').forEach(c => {
+          c.classList.remove('selected');
+          c.style.pointerEvents = 'none';
+        });
+        card.classList.add('selected');
+        installError.classList.add('hidden');
+
+        if (!installed[key]) {
+          installStatus.classList.remove('hidden');
+          installText.textContent = `Installing ${config.name}...`;
+          const result = await manifold.installTool(key);
+          if (result.success) {
+            installed[key] = true;
+            card.querySelector('.tool-card-status').textContent = 'installed';
+            card.querySelector('.tool-card-status').classList.remove('not-installed');
+            installStatus.classList.add('hidden');
+          } else {
+            installStatus.classList.add('hidden');
+            installError.textContent = `Install failed: ${result.error}`;
+            installError.classList.remove('hidden');
+            // Re-enable cards
+            cardsContainer.querySelectorAll('.tool-card').forEach(c => c.style.pointerEvents = '');
+            return;
+          }
+        }
+
+        // Tool is installed — select and close
+        currentTool = key;
+        await manifold.setSelectedTool(key);
+        overlay.classList.add('hidden');
+        // Re-enable cards for next time
+        cardsContainer.querySelectorAll('.tool-card').forEach(c => c.style.pointerEvents = '');
+        resolve();
+      });
+
+      cardsContainer.appendChild(card);
+    }
+
+    overlay.classList.remove('hidden');
+  });
+}
+
+// ── Workspace init (after tool is selected) ──
+
+async function initWorkspace(savedData) {
+  const loaded = await restoreFromState(savedData);
+
+  if (!loaded) {
+    const gTabId = genTabId();
+    state.collections.push({
+      name: 'General',
+      path: homeDir,
+      expanded: true,
+      tabs: [{ id: gTabId, name: 'Session 1', cwd: homeDir }],
+    });
+    createTerminalInstance(gTabId, homeDir, null, 'Session 1', 'General');
+  }
+
+  if (loaded) {
+    const aci = Math.min(loaded.activeCollection, state.collections.length - 1);
+    const col = state.collections[aci];
+    const ati = Math.min(loaded.activeTab, (col ? col.tabs.length - 1 : 0));
+    selectTab(Math.max(0, aci), Math.max(0, ati));
+  } else {
+    selectTab(0, 0);
+  }
+  renderCollections();
+  saveState();
+}
+
+async function restoreFromState(data) {
+  if (!data || !data.collections || !data.collections.length) return false;
+
+  for (let ci = 0; ci < data.collections.length; ci++) {
+    const colData = data.collections[ci];
+
+    const col = {
+      name: colData.name || `Collection ${ci + 1}`,
+      path: colData.path || homeDir || '/',
+      expanded: colData.expanded !== false,
+      tabs: [],
+    };
+
+    const tabs = colData.tabs && colData.tabs.length > 0
+      ? colData.tabs
+      : [{ name: 'Session 1', cwd: col.path }];
+
+    for (const tabData of tabs) {
+      const tabId = genTabId();
+      const cwd = tabData.cwd || col.path;
+      col.tabs.push({
+        id: tabId,
+        name: tabData.name || 'Session',
+        cwd,
+        conversationId: tabData.conversationId || null,
+      });
+      createTerminalInstance(tabId, cwd, tabData.conversationId || null, tabData.name || 'Session', col.name);
+    }
+
+    state.collections.push(col);
+  }
+
+  if (state.collections.length === 0) return false;
+
+  return {
+    activeCollection: data.activeCollection || 0,
+    activeTab: data.activeTab || 0,
+  };
+}
+
 // ── Init ──
 (async () => {
   try {
@@ -1083,35 +1257,28 @@ function escAttr(str) {
     document.getElementById('header-hints').textContent =
       `${toggle} toggle | ${mod}+T session | ${mod}+Y collection | ${mod}+W close | ${mod}+G grid | ${mod}+J journal | Alt+1-9 switch`;
 
-    const loaded = await loadState();
-
-    // Apply saved UI scale
     const savedState = await manifold.loadState();
+
+    // Apply saved UI scale early
     if (savedState && savedState.uiScale) {
       applyScale(savedState.uiScale);
     }
 
-    if (!loaded) {
-      const gTabId = genTabId();
-      state.collections.push({
-        name: 'General',
-        path: homeDir,
-        expanded: true,
-        tabs: [{ id: gTabId, name: 'Session 1', cwd: homeDir }],
-      });
-      createTerminalInstance(gTabId, homeDir, null, 'Session 1', 'General');
-    }
-
-    if (loaded) {
-      const aci = Math.min(loaded.activeCollection, state.collections.length - 1);
-      const col = state.collections[aci];
-      const ati = Math.min(loaded.activeTab, (col ? col.tabs.length - 1 : 0));
-      selectTab(Math.max(0, aci), Math.max(0, ati));
+    if (savedState && savedState.selectedTool) {
+      // Returning user — restore tool and proceed
+      currentTool = savedState.selectedTool;
+      await manifold.setSelectedTool(currentTool);
+      await initWorkspace(savedState);
+    } else if (savedState && savedState.collections && savedState.collections.length > 0) {
+      // Existing user upgrading — default to Claude
+      currentTool = 'claude';
+      await manifold.setSelectedTool('claude');
+      await initWorkspace(savedState);
     } else {
-      selectTab(0, 0);
+      // First launch — show tool selector, then init workspace
+      await showToolSelector();
+      await initWorkspace(null);
     }
-    renderCollections();
-    saveState();
   } catch (err) {
     console.error('Init failed:', err);
   }
