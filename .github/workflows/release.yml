@@ -32,10 +32,8 @@ jobs:
         with:
           name: dist-${{ matrix.os }}
           path: |
-            dist/*.AppImage
             dist/*.deb
             dist/*.dmg
-            dist/*.zip
             dist/*.exe
           if-no-files-found: error
 

@@ -28,7 +28,7 @@
 
 **State persistence** — Collections, tabs, working directories, conversation IDs, and UI preferences are saved automatically and restored on launch.
 
-**Cross-platform** — Native builds for Linux (AppImage, deb), macOS (dmg, zip), and Windows (installer, portable). Windows runs Claude Code through WSL.
+**Cross-platform** — Native builds for Linux (.deb), macOS (.dmg), and Windows (.exe). Windows runs Claude Code through WSL.
 
 ## Keyboard shortcuts
 
@@ -58,11 +58,6 @@ Grab the latest build from [Releases](https://github.com/MindFabric/manifold/rel
 ### Linux
 
 ```bash
-# AppImage
-chmod +x Manifold-*.AppImage
-./Manifold-*.AppImage
-
-# Or install the .deb
 sudo dpkg -i manifold_*.deb
 ```
 
@@ -72,7 +67,7 @@ Open the `.dmg` and drag Manifold to Applications.
 
 ### Windows
 
-Run the `.exe` installer, or use the portable `.exe` directly.
+Run the `.exe` installer.
 
 ## Build from source
 

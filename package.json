@@ -48,7 +48,6 @@
     ],
     "linux": {
       "target": [
-        "AppImage",
         "deb"
       ],
       "category": "Development",
@@ -56,8 +55,7 @@
     },
     "mac": {
       "target": [
-        "dmg",
-        "zip"
+        "dmg"
       ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.png",
@@ -65,8 +63,7 @@
     },
     "win": {
       "target": [
-        "nsis",
-        "portable"
+        "nsis"
       ],
       "icon": "assets/icon.ico"
     },
