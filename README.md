@@ -40,45 +40,11 @@
 | `Ctrl+W` | Close active session |
 | `Ctrl+G` | Toggle grid view |
 | `Ctrl+J` | Toggle journal viewer |
-| `Alt+1-9` | Jump to session N (global) |
+| `Alt+1-9` | Jump to session N (within collection) |
 | `Ctrl+1-9` | Jump to session N (within collection) |
 | `Escape` | Close overlays |
 
 On macOS, `Cmd` replaces `Ctrl` where applicable.
-
-## Install
-
-Grab the latest build from [Releases](https://github.com/MindFabric/manifold-releases/releases/latest) for your platform.
-
-### Prerequisites
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and available on your `PATH`
-- Windows users: [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) with Claude Code installed inside it
-
-### Linux
-
-```bash
-sudo dpkg -i manifold_*.deb
-```
-
-### macOS
-
-```bash
-brew tap MindFabric/manifold
-brew install --cask manifold
-```
-
-Or download the `.dmg` from [Releases](https://github.com/MindFabric/manifold-releases/releases/latest) and drag Manifold to Applications. If macOS says the app is "damaged", run `xattr -cr /Applications/Manifold.app` once.
-
-### Windows
-
-Run the `.exe` installer.
-
-## Configuration
-
-| Environment variable | Default | Description |
-|---------------------|---------|-------------|
-| `MANIFOLD_CMD` | `claude --dangerously-skip-permissions` | Shell command launched in each terminal session |
 
 ## How the journal works
 
