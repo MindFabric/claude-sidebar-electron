@@ -66,3 +66,42 @@ jobs:
 
           echo "Draft release created at https://github.com/MindFabric/manifold-releases/releases/tag/$TAG"
           echo "Review and publish manually."
+
+      - name: Update Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          DMG="artifacts/Manifold-${VERSION}-arm64.dmg"
+          SHA=$(sha256sum "$DMG" | cut -d' ' -f1)
+
+          gh repo clone MindFabric/homebrew-manifold /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+
+          cat > Casks/manifold.rb << CASK
+          cask "manifold" do
+            version "${VERSION}"
+            sha256 "${SHA}"
+
+            url "https://github.com/MindFabric/manifold-releases/releases/download/v#{version}/Manifold-#{version}-arm64.dmg"
+            name "Manifold"
+            desc "Workspace manager for Claude Code"
+            homepage "https://github.com/MindFabric/manifold-releases"
+
+            app "Manifold.app"
+
+            zap trash: [
+              "~/Library/Application Support/Manifold",
+            ]
+          end
+          CASK
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' Casks/manifold.rb
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/manifold.rb
+          git commit -m "Update Manifold to ${VERSION}"
+          git push

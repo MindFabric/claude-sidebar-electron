@@ -63,13 +63,12 @@ sudo dpkg -i manifold_*.deb
 
 ### macOS
 
-Open the `.dmg` and drag Manifold to Applications, then run:
-
 ```bash
-xattr -cr /Applications/Manifold.app
+brew tap MindFabric/manifold
+brew install --cask manifold
 ```
 
-This removes the macOS quarantine flag. Required once because the app isn't notarized through Apple's developer program. After that it launches normally.
+Or download the `.dmg` from [Releases](https://github.com/MindFabric/manifold-releases/releases/latest) and drag Manifold to Applications. If macOS says the app is "damaged", run `xattr -cr /Applications/Manifold.app` once.
 
 ### Windows
 
