@@ -63,7 +63,13 @@ sudo dpkg -i manifold_*.deb
 
 ### macOS
 
-Open the `.dmg` and drag Manifold to Applications. On first launch, **right-click the app → Open** (macOS blocks unsigned apps downloaded from the internet).
+Open the `.dmg` and drag Manifold to Applications, then run:
+
+```bash
+xattr -cr /Applications/Manifold.app
+```
+
+This removes the macOS quarantine flag. Required once because the app isn't notarized through Apple's developer program. After that it launches normally.
 
 ### Windows
 
