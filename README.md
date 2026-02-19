@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/MindFabric/manifold/releases/latest">Download for Linux, macOS, or Windows</a>
+  <a href="https://github.com/MindFabric/manifold-releases/releases/latest">Download for Linux, macOS, or Windows</a>
 </p>
 
 ---
@@ -48,7 +48,7 @@ On macOS, `Cmd` replaces `Ctrl` where applicable.
 
 ## Install
 
-Grab the latest build from [Releases](https://github.com/MindFabric/manifold/releases/latest) for your platform.
+Grab the latest build from [Releases](https://github.com/MindFabric/manifold-releases/releases/latest) for your platform.
 
 ### Prerequisites
 
