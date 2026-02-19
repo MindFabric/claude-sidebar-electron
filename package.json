@@ -4,6 +4,7 @@
   "description": "Manifold — workspace manager for Claude Code",
   "main": "main.js",
   "scripts": {
+    "preinstall": "node scripts/check-deps.js",
     "postinstall": "electron-rebuild",
     "start": "electron . --no-sandbox",
     "dev": "electron . --no-sandbox",
