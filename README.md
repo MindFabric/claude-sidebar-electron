@@ -63,25 +63,11 @@ sudo dpkg -i manifold_*.deb
 
 ### macOS
 
-Open the `.dmg` and drag Manifold to Applications.
+Open the `.dmg` and drag Manifold to Applications. On first launch, **right-click the app → Open** (macOS blocks unsigned apps downloaded from the internet).
 
 ### Windows
 
 Run the `.exe` installer.
-
-## Build from source
-
-```bash
-git clone https://github.com/MindFabric/manifold.git
-cd manifold
-npm install
-npm start              # run in development
-npm run build:linux    # package for Linux
-npm run build:mac      # package for macOS
-npm run build:win      # package for Windows
-```
-
-Requires Node.js 20+ and npm.
 
 ## Configuration
 

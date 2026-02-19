@@ -1,6 +1,6 @@
 {
   "name": "manifold",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Manifold — workspace manager for Claude Code",
   "main": "main.js",
   "scripts": {
@@ -55,11 +55,14 @@
     },
     "mac": {
       "target": [
-        "dmg"
+        {
+          "target": "dmg",
+          "arch": ["universal"]
+        }
       ],
       "category": "public.app-category.developer-tools",
       "icon": "assets/icon.png",
-      "hardenedRuntime": false
+      "identity": null
     },
     "win": {
       "target": [
